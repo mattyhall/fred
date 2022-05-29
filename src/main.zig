@@ -119,10 +119,12 @@ pub const State = struct {
                     self.cursor.pos.y -= 1;
             },
             .down => {
-                if (self.cursor.pos.y >= self.size.height - 1)
-                    self.offset.y += 1
-                else
+                if (self.cursor.pos.y >= self.size.height - 1) {
+                    if (self.cursor.pos.y + self.offset.y < self.buffer.lines.items.len - 1)
+                        self.offset.y += 1;
+                } else {
                     self.cursor.pos.y += 1;
+                }
             },
             .left => self.cursor.pos.x = std.math.max(1, self.cursor.pos.x) - 1,
             .right => self.cursor.pos.x += 1,
@@ -223,4 +225,103 @@ test "buffer line iterator" {
     try std.testing.expectEqualStrings("you", iter.next().?);
     try std.testing.expectEqualStrings("today", iter.next().?);
     try std.testing.expectEqual(@as(?[]u8, null), iter.next());
+}
+
+test "state basic cursor movement" {
+    var gpa = std.testing.allocator;
+    const lit =
+    \\qwerty
+    \\uiopas
+    \\dfghjk
+    \\lzxcvb
+    \\nm1234
+    \\567890
+    ;
+    var data = try gpa.alloc(u8, lit.len);
+    std.mem.copy(u8, data, lit);
+
+    const terminal = Terminal{ .size = .{ .width = 6, .height = 6 }};
+    var state = State.init(&terminal, Buffer.fromSlice(gpa, data));
+    defer state.deinit();
+    try state.buffer.calculateLines();
+
+    state.move(.left);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 0}, state.cursor.pos);
+
+    state.move(.up);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 0}, state.cursor.pos);
+
+    state.move(.right);
+    try std.testing.expectEqual(Position{ .x = 1, .y = 0}, state.cursor.pos);
+
+    state.move(.down);
+    try std.testing.expectEqual(Position{ .x = 1, .y = 1}, state.cursor.pos);
+
+    state.move(.down);
+    state.move(.down);
+    state.move(.down);
+    state.move(.right);
+    state.move(.right);
+    state.move(.right);
+    try std.testing.expectEqual(Position{ .x = 4, .y = 4}, state.cursor.pos);
+
+    state.move(.up);
+    state.move(.up);
+    state.move(.up);
+    state.move(.left);
+    state.move(.left);
+    state.move(.left);
+    try std.testing.expectEqual(Position{ .x = 1, .y = 1}, state.cursor.pos);
+}
+
+test "state viewport" {
+    var gpa = std.testing.allocator;
+    const lit =
+    \\qwerty
+    \\uiopas
+    \\dfghjk
+    \\lzxcvb
+    \\nm1234
+    \\567890
+    ;
+    var data = try gpa.alloc(u8, lit.len);
+    std.mem.copy(u8, data, lit);
+
+    const terminal = Terminal{ .size = .{ .width = 6, .height = 3 }};
+    var state = State.init(&terminal, Buffer.fromSlice(gpa, data));
+    defer state.deinit();
+    try state.buffer.calculateLines();
+
+    state.move(.down);
+    state.move(.down);
+    // Top 'q', cursor on 'd'
+    try std.testing.expectEqual(Position{ .x = 0, .y = 2}, state.cursor.pos);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 0}, state.offset);
+
+    state.move(.down);
+    // Top 'u', cursor on 'l'
+    try std.testing.expectEqual(Position{ .x = 0, .y = 2}, state.cursor.pos);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 1}, state.offset);
+
+    state.move(.down);
+    state.move(.down);
+    // Top 'l', cursor on '5'
+    try std.testing.expectEqual(Position{ .x = 0, .y = 2}, state.cursor.pos);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 3}, state.offset);
+
+    state.move(.down);
+    // Top still 'l', cursor on '5'
+    try std.testing.expectEqual(Position{ .x = 0, .y = 2}, state.cursor.pos);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 3}, state.offset);
+
+    state.move(.up);
+    state.move(.up);
+    // Top still 'l', cursor on 'l'
+    try std.testing.expectEqual(Position{ .x = 0, .y = 0}, state.cursor.pos);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 3}, state.offset);
+
+    state.move(.up);
+    // Top 'd', cursor on 'd'
+    try std.testing.expectEqual(Position{ .x = 0, .y = 0}, state.cursor.pos);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 2}, state.offset);
 }
