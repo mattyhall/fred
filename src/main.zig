@@ -54,6 +54,28 @@ pub const Buffer = struct {
         return .{ .lines = self.lines.items, .data = self.data.items, .i = 0 };
     }
 
+    pub fn draw(self: *const Self, writer: anytype, lines: u32, offset: Position) !void {
+        _ = try writer.write("\x1b[2J");
+        _ = try writer.write("\x1b[1;1H");
+
+        {
+            var iter = self.lineIterator();
+            var i: u32 = 0;
+            var skipped: u32 = 0;
+            while (iter.next()) |line| {
+                if (skipped < offset.y) {
+                    skipped += 1;
+                    continue;
+                }
+                if (i >= lines) break;
+
+                _ = try writer.write(line);
+                _ = try writer.write("\x1b[1E");
+                i += 1;
+            }
+        }
+    }
+
     pub fn deinit(self: *Self) void {
         self.data.deinit(self.gpa);
         self.lines.deinit(self.gpa);
@@ -81,14 +103,39 @@ pub const Mode = union(enum) { normal, insert, command };
 pub const State = struct {
     cursor: Cursor = .{ .pos = .{ .x = 0, .y = 0 } },
     offset: Position = .{ .x = 0, .y = 0 },
+    size: *const Terminal.Size,
+    buffer: Buffer,
+
+    pub fn init(terminal: *const Terminal, buffer: Buffer) State {
+        return .{ .size = &terminal.size, .buffer = buffer };
+    }
 
     pub fn move(self: *State, movement: Movement) void {
         switch (movement) {
-            .up => self.cursor.pos.y -= 1,
-            .down => self.cursor.pos.y += 1,
-            .left => self.cursor.pos.x -= 1,
+            .up => {
+                if (self.cursor.pos.y == 0)
+                    self.offset.y = std.math.max(1, self.offset.y) - 1
+                else
+                    self.cursor.pos.y -= 1;
+            },
+            .down => {
+                if (self.cursor.pos.y >= self.size.height - 1)
+                    self.offset.y += 1
+                else
+                    self.cursor.pos.y += 1;
+            },
+            .left => self.cursor.pos.x = std.math.max(1, self.cursor.pos.x) - 1,
             .right => self.cursor.pos.x += 1,
         }
+    }
+
+    pub fn draw(self: *const State, writer: anytype) !void {
+        try self.buffer.draw(writer, self.size.height, self.offset);
+        try self.cursor.draw(writer);
+    }
+
+    pub fn deinit(self: *State) void {
+        self.buffer.deinit();
     }
 };
 
@@ -109,36 +156,19 @@ pub const InputHandler = struct {
     }
 };
 
-pub fn draw(writer: anytype, buf: *const Buffer, lines: u32) !void {
-    _ = try writer.write("\x1b[2J");
-    _ = try writer.write("\x1b[1;1H");
-
-    {
-        var iter = buf.lineIterator();
-        var i: u32 = 0;
-        while (iter.next()) |line| {
-            if (i >= lines) break;
-            _ = try writer.write(line);
-            _ = try writer.write("\x1b[1E");
-            i += 1;
-        }
-    }
-}
-
 pub fn main() anyerror!void {
     var terminal = try Terminal.init();
     var gpa = std.heap.GeneralPurposeAllocator(.{}){ .backing_allocator = std.heap.c_allocator };
     var allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    var buffer = try Buffer.fromFile(allocator, "../zig/src/main.zig");
-    defer buffer.deinit();
-    try buffer.calculateLines();
-
     var stdout = std.io.bufferedWriter(std.io.getStdOut().writer());
     var writer = stdout.writer();
 
-    var state = State{};
+    var state = State.init(terminal, try Buffer.fromFile(allocator, "../zig/src/main.zig"));
+    defer state.deinit();
+    try state.buffer.calculateLines();
+
     var inputHandler = InputHandler{};
 
     while (true) {
@@ -159,8 +189,7 @@ pub fn main() anyerror!void {
                 }
             }
 
-            try draw(writer, &buffer, terminal.height);
-            try state.cursor.draw(writer);
+            try state.draw(writer);
             try stdout.flush();
         }
 
@@ -168,8 +197,7 @@ pub fn main() anyerror!void {
         if (poll_fds[1].revents & (std.os.POLL.IN) != 0) {
             _ = try std.os.read(terminal.fd, &proc_buf);
 
-            try draw(writer, &buffer, terminal.height);
-            try state.cursor.draw(writer);
+            try state.draw(writer);
             try stdout.flush();
         }
     }

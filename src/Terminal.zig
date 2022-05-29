@@ -6,6 +6,8 @@ const c = @cImport({
     @cInclude("signal.h");
 });
 
+pub const Size = struct { width: u32, height: u32 };
+
 const MAX_EVENTS_PER_FRAME = 32;
 
 const Self = @This();
@@ -14,8 +16,7 @@ const stdin = std.io.getStdIn().reader();
 
 var instance: ?Self = null;
 
-width: u32 = 0,
-height: u32 = 0,
+size: Size,
 original_terminal_settings: c.struct_termios = undefined,
 events: [MAX_EVENTS_PER_FRAME]u8 = undefined,
 fd: std.os.fd_t,
@@ -33,8 +34,8 @@ fn handleResize(_: c_int) callconv(.C) void {
     if (c.ioctl(std.os.STDIN_FILENO, c.TIOCGWINSZ, &sz) != 0)
         std.os.exit(1);
 
-    instance.?.width = sz.ws_col;
-    instance.?.height = sz.ws_row;
+    instance.?.size.width = sz.ws_col;
+    instance.?.size.height = sz.ws_row;
 
     // An eventfd takes a 64bit integer.
     // FIXME(mjh): don't assume endianess
@@ -43,7 +44,7 @@ fn handleResize(_: c_int) callconv(.C) void {
 
 pub fn init() error{ TermiosFailure, WinSzFailure, EventFdFailure }!*Self {
     std.debug.assert(instance == null);
-    instance = Self{ .fd = undefined };
+    instance = Self{ .fd = undefined, .size = .{ .width = 0, .height = 0 } };
 
     // FIXME(mjh): find a mac alternative
     instance.?.fd = std.os.eventfd(0, 0) catch return error.EventFdFailure;
