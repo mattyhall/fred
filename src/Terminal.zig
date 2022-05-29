@@ -21,6 +21,10 @@ events: [MAX_EVENTS_PER_FRAME]u8 = undefined,
 fd: std.os.fd_t,
 
 fn cleanupTerminal() callconv(.C) void {
+    _ = std.io.getStdOut().writer().write("\x1b[0;0H\x1b[2J") catch {
+        @panic("could not reset display");
+    };
+
     _ = c.tcsetattr(std.os.STDIN_FILENO, c.TCSANOW, &instance.?.original_terminal_settings);
 }
 

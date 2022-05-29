@@ -110,8 +110,8 @@ pub const InputHandler = struct {
 };
 
 pub fn draw(writer: anytype, buf: *const Buffer, lines: u32) !void {
+    _ = try writer.write("\x1b[2J");
     _ = try writer.write("\x1b[1;1H");
-    _ = try writer.write("\x1b[0J");
 
     {
         var iter = buf.lineIterator();
