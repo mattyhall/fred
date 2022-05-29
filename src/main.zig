@@ -29,11 +29,7 @@ pub const Buffer = struct {
         defer f.close();
 
         var data = try f.readToEndAlloc(allocator, 2 * 1024 * 1024);
-        return Self{
-            .gpa = allocator,
-            .data = std.ArrayListUnmanaged(u8){ .items = data, .capacity = data.len },
-            .lines = std.ArrayListUnmanaged(u32){},
-        };
+        return fromSlice(allocator, data);
     }
 
     pub fn fromSlice(allocator: std.mem.Allocator, data: []u8) Self {
@@ -64,11 +60,56 @@ pub const Buffer = struct {
     }
 };
 
-pub fn draw(buf: *const Buffer, lines: u32) !void {
-    _ = buf;
-    var stdout = std.io.bufferedWriter(std.io.getStdOut().writer());
-    var writer = stdout.writer();
+pub const Position = struct { x: u32, y: u32 };
+pub const Cursor = struct {
+    pos: Position,
 
+    fn draw(self: Cursor, writer: anytype) !void {
+        _ = try writer.print("\x1b[{};{}H", .{ self.pos.y + 1, self.pos.x + 1 });
+    }
+};
+
+pub const Movement = union(enum) {
+    up,
+    down,
+    left,
+    right,
+};
+
+pub const Mode = union(enum) { normal, insert, command };
+
+pub const State = struct {
+    cursor: Cursor = .{ .pos = .{ .x = 0, .y = 0 } },
+    offset: Position = .{ .x = 0, .y = 0 },
+
+    pub fn move(self: *State, movement: Movement) void {
+        switch (movement) {
+            .up => self.cursor.pos.y -= 1,
+            .down => self.cursor.pos.y += 1,
+            .left => self.cursor.pos.x -= 1,
+            .right => self.cursor.pos.x += 1,
+        }
+    }
+};
+
+pub const InputHandler = struct {
+    mode: Mode = .normal,
+
+    pub fn handleInput(self: *InputHandler, c: u8) ?Movement {
+        return switch (self.mode) {
+            .normal => switch (c) {
+                'j' => Movement.down,
+                'k' => Movement.up,
+                'l' => Movement.right,
+                'h' => Movement.left,
+                else => return null,
+            },
+            else => return null,
+        };
+    }
+};
+
+pub fn draw(writer: anytype, buf: *const Buffer, lines: u32) !void {
     _ = try writer.write("\x1b[1;1H");
     _ = try writer.write("\x1b[0J");
 
@@ -82,8 +123,6 @@ pub fn draw(buf: *const Buffer, lines: u32) !void {
             i += 1;
         }
     }
-
-    try stdout.flush();
 }
 
 pub fn main() anyerror!void {
@@ -96,7 +135,11 @@ pub fn main() anyerror!void {
     defer buffer.deinit();
     try buffer.calculateLines();
 
-    try draw(&buffer, terminal.height);
+    var stdout = std.io.bufferedWriter(std.io.getStdOut().writer());
+    var writer = stdout.writer();
+
+    var state = State{};
+    var inputHandler = InputHandler{};
 
     while (true) {
         var poll_fds = [_]std.os.pollfd{
@@ -111,13 +154,23 @@ pub fn main() anyerror!void {
             const input = terminal.getInput();
             for (input) |ch| {
                 if (ch == 'q') std.os.exit(0);
+                if (inputHandler.handleInput(ch)) |movement| {
+                    state.move(movement);
+                }
             }
+
+            try draw(writer, &buffer, terminal.height);
+            try state.cursor.draw(writer);
+            try stdout.flush();
         }
 
         var proc_buf: [16 * 1024]u8 = undefined;
         if (poll_fds[1].revents & (std.os.POLL.IN) != 0) {
             _ = try std.os.read(terminal.fd, &proc_buf);
-            try draw(&buffer, terminal.height);
+
+            try draw(writer, &buffer, terminal.height);
+            try state.cursor.draw(writer);
+            try stdout.flush();
         }
     }
 }
@@ -132,7 +185,7 @@ test "buffer line iterator" {
     defer buf.deinit();
     try buf.calculateLines();
 
-    try std.testing.expectEqualSlices(u32, &.{0, 6, 12, 16, 20, 24}, buf.lines.items);
+    try std.testing.expectEqualSlices(u32, &.{ 0, 6, 12, 16, 20, 24 }, buf.lines.items);
 
     var iter = buf.lineIterator();
     try std.testing.expectEqualStrings("hello", iter.next().?);
