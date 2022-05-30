@@ -161,6 +161,10 @@ pub const State = struct {
                     self.offset.y = std.math.max(1, self.offset.y) - 1
                 else
                     self.cursor.pos.y -= 1;
+                self.cursor.pos.x = std.math.max(1, std.math.min(
+                    self.cursor.pos.x + 1,
+                    self.buffer.lineSpan(self.bufferCursorPos().y).width(),
+                )) - 1;
             },
             .down => {
                 if (self.cursor.pos.y >= self.size.height - 1) {
@@ -169,9 +173,16 @@ pub const State = struct {
                 } else if (pos.y < self.buffer.lines.items.len - 1) {
                     self.cursor.pos.y += 1;
                 }
+                self.cursor.pos.x = std.math.max(1, std.math.min(
+                    self.cursor.pos.x + 1,
+                    self.buffer.lineSpan(self.bufferCursorPos().y).width(),
+                )) - 1;
             },
             .left => self.cursor.pos.x = std.math.max(1, self.cursor.pos.x) - 1,
-            .right => self.cursor.pos.x += 1,
+            .right => self.cursor.pos.x = std.math.min(
+                self.cursor.pos.x + 1,
+                std.math.max(1, self.buffer.lineSpan(pos.y).width()) - 1,
+            ),
             .top => {
                 self.cursor.pos = .{ .x = 0, .y = 0 };
                 self.offset = .{ .x = 0, .y = 0 };
@@ -489,6 +500,38 @@ test "state goto start/end of line" {
     state.move(.line_end);
     try std.testing.expectEqual(Position{ .x = 23, .y = 1 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 1 }, state.offset);
+}
+
+test "state clamp line end" {
+    var gpa = std.testing.allocator;
+    const lit =
+        \\helloworldhowareyoutoday
+        \\world
+        \\hi
+    ;
+    var data = try gpa.alloc(u8, lit.len);
+    std.mem.copy(u8, data, lit);
+
+    var terminal = Terminal{ .size = .{ .width = 100, .height = 3 } };
+    var state = State.init(&terminal, Buffer.fromSlice(gpa, data));
+    defer state.deinit();
+    try state.buffer.calculateLines();
+
+    state.move(.line_end);
+    try std.testing.expectEqual(Position{ .x = 23, .y = 0 }, state.cursor.pos);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.offset);
+
+    state.move(.right);
+    try std.testing.expectEqual(Position{ .x = 23, .y = 0 }, state.cursor.pos);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.offset);
+
+    state.move(.down);
+    try std.testing.expectEqual(Position{ .x = 4, .y = 1 }, state.cursor.pos);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.offset);
+
+    state.move(.down);
+    try std.testing.expectEqual(Position{ .x = 1, .y = 2 }, state.cursor.pos);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.offset);
 }
 
 test "state can't scroll past last line" {
