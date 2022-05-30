@@ -13,10 +13,19 @@ pub fn log(
     comptime format: []const u8,
     args: anytype,
 ) void {
-    const scopePrefix = "(" ++  @tagName(scope) ++ ")";
+    const scopePrefix = "(" ++ @tagName(scope) ++ ")";
     const prefix = "[" ++ level.asText() ++ "]";
     log_file.writer().print(prefix ++ " " ++ scopePrefix ++ " " ++ format ++ "\n", args) catch unreachable;
 }
+
+pub const Span = struct {
+    start: u32,
+    end: u32,
+
+    pub fn width(self: Span) u32 {
+        return self.end - self.start;
+    }
+};
 
 pub const Buffer = struct {
     gpa: std.mem.Allocator,
@@ -71,6 +80,16 @@ pub const Buffer = struct {
         return .{ .lines = self.lines.items, .data = self.data.items, .i = 0 };
     }
 
+    pub fn lineSpan(self: *const Self, line: u32) Span {
+        const line_start = self.lines.items[line];
+        const line_end = if (line < self.lines.items.len - 1)
+            self.lines.items[line + 1] - 1 // -1 to omit the newline
+        else
+            @intCast(u32, self.data.items.len);
+
+        return .{ .start = line_start, .end = line_end };
+    }
+
     pub fn draw(self: *const Self, writer: anytype, lines: u32, offset: Position) !void {
         _ = try writer.write("\x1b[2J");
         _ = try writer.write("\x1b[1;1H");
@@ -115,6 +134,8 @@ pub const Movement = union(enum) {
     right,
     end,
     top,
+    line_start,
+    line_end,
 };
 
 pub const State = struct {
@@ -127,7 +148,12 @@ pub const State = struct {
         return .{ .size = &terminal.size, .buffer = buffer };
     }
 
+    pub fn bufferCursorPos(self: *const State) Position {
+        return .{ .x = self.cursor.pos.x + self.offset.x, .y = self.cursor.pos.y + self.offset.y };
+    }
+
     pub fn move(self: *State, movement: Movement) void {
+        const pos = self.bufferCursorPos();
         switch (movement) {
             .up => {
                 if (self.cursor.pos.y == 0)
@@ -137,9 +163,9 @@ pub const State = struct {
             },
             .down => {
                 if (self.cursor.pos.y >= self.size.height - 1) {
-                    if (self.cursor.pos.y + self.offset.y < self.buffer.lines.items.len - 1)
+                    if (pos.y < self.buffer.lines.items.len - 1)
                         self.offset.y += 1;
-                } else if (self.cursor.pos.y + self.offset.y < self.buffer.lines.items.len - 1) {
+                } else if (pos.y < self.buffer.lines.items.len - 1) {
                     self.cursor.pos.y += 1;
                 }
             },
@@ -154,6 +180,8 @@ pub const State = struct {
                 if (self.buffer.lines.items.len > self.size.height)
                     self.offset = .{ .x = 0, .y = @intCast(u32, self.buffer.lines.items.len) - self.size.height };
             },
+            .line_start => self.cursor.pos.x = 0,
+            .line_end => self.cursor.pos.x = self.buffer.lineSpan(pos.y).width() - 1,
         }
     }
 
@@ -200,6 +228,14 @@ pub const InputHandler = struct {
                     'g' => blk: {
                         self.mode = .{ .normal = .none };
                         break :blk Movement.top;
+                    },
+                    'h' => blk: {
+                        self.mode = .{ .normal = .none };
+                        break :blk Movement.line_start;
+                    },
+                    'l' => blk: {
+                        self.mode = .{ .normal = .none };
+                        break :blk Movement.line_end;
                     },
                     else => {
                         self.mode = .{ .normal = .none };
@@ -385,16 +421,16 @@ test "state viewport" {
 test "state goto top/bottom" {
     var gpa = std.testing.allocator;
     const lit =
-    \\1
-    \\2
-    \\3
-    \\4
-    \\5
-    \\6
-    \\7
-    \\8
-    \\9
-    \\10
+        \\1
+        \\2
+        \\3
+        \\4
+        \\5
+        \\6
+        \\7
+        \\8
+        \\9
+        \\10
     ;
     var data = try gpa.alloc(u8, lit.len);
     std.mem.copy(u8, data, lit);
@@ -420,20 +456,54 @@ test "state goto top/bottom" {
     try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.offset);
 }
 
+test "state goto start/end of line" {
+    var gpa = std.testing.allocator;
+    const lit =
+        \\hello
+        \\world
+        \\helloworldhowareyoutoday
+    ;
+    var data = try gpa.alloc(u8, lit.len);
+    std.mem.copy(u8, data, lit);
+
+    var terminal = Terminal{ .size = .{ .width = 100, .height = 2 } };
+    var state = State.init(&terminal, Buffer.fromSlice(gpa, data));
+    defer state.deinit();
+    try state.buffer.calculateLines();
+
+    state.move(.line_end);
+    try std.testing.expectEqual(Position{ .x = 4, .y = 0 }, state.cursor.pos);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.offset);
+
+    state.move(.down);
+    state.move(.line_start);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 1 }, state.cursor.pos);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.offset);
+
+    state.move(.line_end);
+    try std.testing.expectEqual(Position{ .x = 4, .y = 1 }, state.cursor.pos);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.offset);
+
+    state.move(.down);
+    state.move(.line_end);
+    try std.testing.expectEqual(Position{ .x = 23, .y = 1 }, state.cursor.pos);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 1 }, state.offset);
+}
+
 test "state can't scroll past last line" {
     // Can happen if you are on the last line and make the window bigger - there will be blank space at the bottom
     var gpa = std.testing.allocator;
     const lit =
-    \\1
-    \\2
-    \\3
-    \\4
-    \\5
-    \\6
-    \\7
-    \\8
-    \\9
-    \\10
+        \\1
+        \\2
+        \\3
+        \\4
+        \\5
+        \\6
+        \\7
+        \\8
+        \\9
+        \\10
     ;
     var data = try gpa.alloc(u8, lit.len);
     std.mem.copy(u8, data, lit);
