@@ -1,6 +1,23 @@
 const std = @import("std");
 const Terminal = @import("Terminal.zig");
 
+var log_file: std.fs.File = undefined;
+
+fn setupLogging() !void {
+    log_file = try std.fs.cwd().createFile("fred.log", .{});
+}
+
+pub fn log(
+    comptime level: std.log.Level,
+    comptime scope: @TypeOf(.EnumLiteral),
+    comptime format: []const u8,
+    args: anytype,
+) void {
+    const scopePrefix = "(" ++  @tagName(scope) ++ ")";
+    const prefix = "[" ++ level.asText() ++ "]";
+    log_file.writer().print(prefix ++ " " ++ scopePrefix ++ " " ++ format ++ "\n", args) catch unreachable;
+}
+
 pub const Buffer = struct {
     gpa: std.mem.Allocator,
     data: std.ArrayListUnmanaged(u8),
@@ -159,6 +176,8 @@ pub const InputHandler = struct {
 };
 
 pub fn main() anyerror!void {
+    try setupLogging();
+
     var terminal = try Terminal.init();
     var gpa = std.heap.GeneralPurposeAllocator(.{}){ .backing_allocator = std.heap.c_allocator };
     var allocator = gpa.allocator();
