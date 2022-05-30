@@ -131,6 +131,8 @@ pub const Cursor = struct {
 pub const Movement = union(enum) {
     up,
     down,
+    viewport_up,
+    viewport_down,
     left,
     right,
     end,
@@ -194,6 +196,17 @@ pub const State = struct {
             },
             .line_start => self.cursor.pos.x = 0,
             .line_end => self.cursor.pos.x = self.buffer.lineSpan(pos.y).width() - 1,
+            .viewport_up => {
+                if (self.offset.y == 0) return;
+                self.offset.y -= 1;
+                if (self.cursor.pos.y < self.size.height - 1) self.cursor.pos.y += 1;
+            },
+            .viewport_down => {
+                if (self.offset.y >= self.buffer.lines.items.len - 1) return;
+
+                self.offset.y += 1;
+                if (self.cursor.pos.y > 0) self.cursor.pos.y -= 1;
+            },
         }
     }
 
@@ -207,7 +220,7 @@ pub const State = struct {
     }
 };
 
-pub const NormalModeState = enum { none, goto };
+pub const NormalModeState = enum { none, goto, viewport };
 
 pub const Mode = union(enum) {
     normal: NormalModeState,
@@ -230,6 +243,10 @@ pub const InputHandler = struct {
                         self.mode = .{ .normal = .goto };
                         return null;
                     },
+                    'V' => {
+                        self.mode = .{ .normal = .viewport };
+                        return null;
+                    },
                     else => return null,
                 },
                 .goto => switch (c) {
@@ -249,6 +266,14 @@ pub const InputHandler = struct {
                         self.mode = .{ .normal = .none };
                         break :blk Movement.line_end;
                     },
+                    else => {
+                        self.mode = .{ .normal = .none };
+                        return null;
+                    },
+                },
+                .viewport => switch (c) {
+                    'j' => Movement.viewport_down,
+                    'k' => Movement.viewport_up,
                     else => {
                         self.mode = .{ .normal = .none };
                         return null;
@@ -532,6 +557,59 @@ test "state clamp line end" {
     state.move(.down);
     try std.testing.expectEqual(Position{ .x = 1, .y = 2 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.offset);
+}
+
+test "state viewport up/down" {
+    var gpa = std.testing.allocator;
+    const lit =
+        \\1
+        \\2
+        \\3
+        \\4
+        \\5
+        \\6
+        \\7
+        \\8
+        \\9
+        \\10
+    ;
+    var data = try gpa.alloc(u8, lit.len);
+    std.mem.copy(u8, data, lit);
+
+    var terminal = Terminal{ .size = .{ .width = 100, .height = 5 } };
+    var state = State.init(&terminal, Buffer.fromSlice(gpa, data));
+    defer state.deinit();
+    try state.buffer.calculateLines();
+
+    state.move(.viewport_up);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.cursor.pos);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.offset);
+
+    state.move(.down);
+    state.move(.down);
+    // Top '1', cursor '3'
+    try std.testing.expectEqual(Position{ .x = 0, .y = 2 }, state.cursor.pos);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.offset);
+
+    state.move(.viewport_down);
+    state.move(.viewport_down);
+    // Top '3', cursor '3'
+    try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.cursor.pos);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 2 }, state.offset);
+
+    state.move(.viewport_down);
+    state.move(.viewport_down);
+    state.move(.viewport_down);
+    state.move(.viewport_down);
+    // Top '7', cursor '7'
+    try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.cursor.pos);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 6 }, state.offset);
+
+    state.move(.viewport_up);
+    state.move(.viewport_up);
+    // Top '5', cursor '7'
+    try std.testing.expectEqual(Position{ .x = 0, .y = 2 }, state.cursor.pos);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 4 }, state.offset);
 }
 
 test "state can't scroll past last line" {
