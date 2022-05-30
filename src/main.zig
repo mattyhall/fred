@@ -33,7 +33,7 @@ pub const Buffer = struct {
         pub fn next(self: *LineIterator) ?[]u8 {
             if (self.i >= self.lines.len) return null;
             const slice = if (self.i == self.lines.len - 1)
-                self.data[self.lines[self.i]..]
+                self.data[self.lines[self.i] .. self.data.len - 1]
             else
                 self.data[self.lines[self.i] .. self.lines[self.i + 1] - 1];
             self.i += 1;
@@ -113,9 +113,9 @@ pub const Movement = union(enum) {
     down,
     left,
     right,
+    end,
+    top,
 };
-
-pub const Mode = union(enum) { normal, insert, command };
 
 pub const State = struct {
     cursor: Cursor = .{ .pos = .{ .x = 0, .y = 0 } },
@@ -145,6 +145,15 @@ pub const State = struct {
             },
             .left => self.cursor.pos.x = std.math.max(1, self.cursor.pos.x) - 1,
             .right => self.cursor.pos.x += 1,
+            .top => {
+                self.cursor.pos = .{ .x = 0, .y = 0 };
+                self.offset = .{ .x = 0, .y = 0 };
+            },
+            .end => {
+                self.cursor.pos = .{ .x = 0, .y = std.math.min(self.buffer.lines.items.len - 1, self.size.height - 1) };
+                if (self.buffer.lines.items.len > self.size.height)
+                    self.offset = .{ .x = 0, .y = @intCast(u32, self.buffer.lines.items.len) - self.size.height };
+            },
         }
     }
 
@@ -158,17 +167,45 @@ pub const State = struct {
     }
 };
 
+pub const NormalModeState = enum { none, goto };
+
+pub const Mode = union(enum) {
+    normal: NormalModeState,
+    insert,
+    command,
+};
+
 pub const InputHandler = struct {
-    mode: Mode = .normal,
+    mode: Mode = .{ .normal = .none },
 
     pub fn handleInput(self: *InputHandler, c: u8) ?Movement {
         return switch (self.mode) {
-            .normal => switch (c) {
-                'j' => Movement.down,
-                'k' => Movement.up,
-                'l' => Movement.right,
-                'h' => Movement.left,
-                else => return null,
+            .normal => |state| switch (state) {
+                .none => switch (c) {
+                    'j' => Movement.down,
+                    'k' => Movement.up,
+                    'l' => Movement.right,
+                    'h' => Movement.left,
+                    'g' => {
+                        self.mode = .{ .normal = .goto };
+                        return null;
+                    },
+                    else => return null,
+                },
+                .goto => switch (c) {
+                    'e' => blk: {
+                        self.mode = .{ .normal = .none };
+                        break :blk Movement.end;
+                    },
+                    'g' => blk: {
+                        self.mode = .{ .normal = .none };
+                        break :blk Movement.top;
+                    },
+                    else => {
+                        self.mode = .{ .normal = .none };
+                        return null;
+                    },
+                },
             },
             else => return null,
         };
@@ -226,7 +263,7 @@ pub fn main() anyerror!void {
 
 test "buffer line iterator" {
     var gpa = std.testing.allocator;
-    const lit = "hello\nworld\nhow\nare\nyou\ntoday";
+    const lit = "hello\nworld\nhow\nare\nyou\ntoday\n";
     var data = try gpa.alloc(u8, lit.len);
     std.mem.copy(u8, data, lit);
 
@@ -249,32 +286,32 @@ test "buffer line iterator" {
 test "state basic cursor movement" {
     var gpa = std.testing.allocator;
     const lit =
-    \\qwerty
-    \\uiopas
-    \\dfghjk
-    \\lzxcvb
-    \\nm1234
-    \\567890
+        \\qwerty
+        \\uiopas
+        \\dfghjk
+        \\lzxcvb
+        \\nm1234
+        \\567890
     ;
     var data = try gpa.alloc(u8, lit.len);
     std.mem.copy(u8, data, lit);
 
-    const terminal = Terminal{ .size = .{ .width = 6, .height = 6 }};
+    const terminal = Terminal{ .size = .{ .width = 6, .height = 6 } };
     var state = State.init(&terminal, Buffer.fromSlice(gpa, data));
     defer state.deinit();
     try state.buffer.calculateLines();
 
     state.move(.left);
-    try std.testing.expectEqual(Position{ .x = 0, .y = 0}, state.cursor.pos);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.cursor.pos);
 
     state.move(.up);
-    try std.testing.expectEqual(Position{ .x = 0, .y = 0}, state.cursor.pos);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.cursor.pos);
 
     state.move(.right);
-    try std.testing.expectEqual(Position{ .x = 1, .y = 0}, state.cursor.pos);
+    try std.testing.expectEqual(Position{ .x = 1, .y = 0 }, state.cursor.pos);
 
     state.move(.down);
-    try std.testing.expectEqual(Position{ .x = 1, .y = 1}, state.cursor.pos);
+    try std.testing.expectEqual(Position{ .x = 1, .y = 1 }, state.cursor.pos);
 
     state.move(.down);
     state.move(.down);
@@ -282,7 +319,7 @@ test "state basic cursor movement" {
     state.move(.right);
     state.move(.right);
     state.move(.right);
-    try std.testing.expectEqual(Position{ .x = 4, .y = 4}, state.cursor.pos);
+    try std.testing.expectEqual(Position{ .x = 4, .y = 4 }, state.cursor.pos);
 
     state.move(.up);
     state.move(.up);
@@ -290,23 +327,23 @@ test "state basic cursor movement" {
     state.move(.left);
     state.move(.left);
     state.move(.left);
-    try std.testing.expectEqual(Position{ .x = 1, .y = 1}, state.cursor.pos);
+    try std.testing.expectEqual(Position{ .x = 1, .y = 1 }, state.cursor.pos);
 }
 
 test "state viewport" {
     var gpa = std.testing.allocator;
     const lit =
-    \\qwerty
-    \\uiopas
-    \\dfghjk
-    \\lzxcvb
-    \\nm1234
-    \\567890
+        \\qwerty
+        \\uiopas
+        \\dfghjk
+        \\lzxcvb
+        \\nm1234
+        \\567890
     ;
     var data = try gpa.alloc(u8, lit.len);
     std.mem.copy(u8, data, lit);
 
-    const terminal = Terminal{ .size = .{ .width = 6, .height = 3 }};
+    const terminal = Terminal{ .size = .{ .width = 6, .height = 3 } };
     var state = State.init(&terminal, Buffer.fromSlice(gpa, data));
     defer state.deinit();
     try state.buffer.calculateLines();
@@ -314,33 +351,71 @@ test "state viewport" {
     state.move(.down);
     state.move(.down);
     // Top 'q', cursor on 'd'
-    try std.testing.expectEqual(Position{ .x = 0, .y = 2}, state.cursor.pos);
-    try std.testing.expectEqual(Position{ .x = 0, .y = 0}, state.offset);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 2 }, state.cursor.pos);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.offset);
 
     state.move(.down);
     // Top 'u', cursor on 'l'
-    try std.testing.expectEqual(Position{ .x = 0, .y = 2}, state.cursor.pos);
-    try std.testing.expectEqual(Position{ .x = 0, .y = 1}, state.offset);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 2 }, state.cursor.pos);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 1 }, state.offset);
 
     state.move(.down);
     state.move(.down);
     // Top 'l', cursor on '5'
-    try std.testing.expectEqual(Position{ .x = 0, .y = 2}, state.cursor.pos);
-    try std.testing.expectEqual(Position{ .x = 0, .y = 3}, state.offset);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 2 }, state.cursor.pos);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 3 }, state.offset);
 
     state.move(.down);
     // Top still 'l', cursor on '5'
-    try std.testing.expectEqual(Position{ .x = 0, .y = 2}, state.cursor.pos);
-    try std.testing.expectEqual(Position{ .x = 0, .y = 3}, state.offset);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 2 }, state.cursor.pos);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 3 }, state.offset);
 
     state.move(.up);
     state.move(.up);
     // Top still 'l', cursor on 'l'
-    try std.testing.expectEqual(Position{ .x = 0, .y = 0}, state.cursor.pos);
-    try std.testing.expectEqual(Position{ .x = 0, .y = 3}, state.offset);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.cursor.pos);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 3 }, state.offset);
 
     state.move(.up);
     // Top 'd', cursor on 'd'
-    try std.testing.expectEqual(Position{ .x = 0, .y = 0}, state.cursor.pos);
-    try std.testing.expectEqual(Position{ .x = 0, .y = 2}, state.offset);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.cursor.pos);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 2 }, state.offset);
+}
+
+test "state goto top/bottom" {
+    var gpa = std.testing.allocator;
+    const lit =
+    \\1
+    \\2
+    \\3
+    \\4
+    \\5
+    \\6
+    \\7
+    \\8
+    \\9
+    \\10
+    ;
+    var data = try gpa.alloc(u8, lit.len);
+    std.mem.copy(u8, data, lit);
+
+    var terminal = Terminal{ .size = .{ .width = 10, .height = 5 } };
+    var state = State.init(&terminal, Buffer.fromSlice(gpa, data));
+    defer state.deinit();
+    try state.buffer.calculateLines();
+
+    state.move(.end);
+    // Top '6', cursor on '10'
+    try std.testing.expectEqual(Position{ .x = 0, .y = 4 }, state.cursor.pos);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 5 }, state.offset);
+
+    state.move(.top);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.cursor.pos);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.offset);
+
+    terminal.size.height = 15;
+    state.move(.end);
+    // Top '1', cursor on '10'
+    try std.testing.expectEqual(Position{ .x = 0, .y = 9 }, state.cursor.pos);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.offset);
 }
