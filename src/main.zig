@@ -124,6 +124,7 @@ pub const Cursor = struct {
 
     fn draw(self: Cursor, writer: anytype) !void {
         _ = try writer.print("\x1b[{};{}H", .{ self.pos.y + 1, self.pos.x + 1 });
+        _ = try writer.write("\x1b[2 q"); // Block cursor
     }
 };
 
