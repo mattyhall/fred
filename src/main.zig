@@ -139,7 +139,7 @@ pub const State = struct {
                 if (self.cursor.pos.y >= self.size.height - 1) {
                     if (self.cursor.pos.y + self.offset.y < self.buffer.lines.items.len - 1)
                         self.offset.y += 1;
-                } else {
+                } else if (self.cursor.pos.y + self.offset.y < self.buffer.lines.items.len - 1) {
                     self.cursor.pos.y += 1;
                 }
             },
@@ -418,4 +418,39 @@ test "state goto top/bottom" {
     // Top '1', cursor on '10'
     try std.testing.expectEqual(Position{ .x = 0, .y = 9 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.offset);
+}
+
+test "state can't scroll past last line" {
+    // Can happen if you are on the last line and make the window bigger - there will be blank space at the bottom
+    var gpa = std.testing.allocator;
+    const lit =
+    \\1
+    \\2
+    \\3
+    \\4
+    \\5
+    \\6
+    \\7
+    \\8
+    \\9
+    \\10
+    ;
+    var data = try gpa.alloc(u8, lit.len);
+    std.mem.copy(u8, data, lit);
+
+    var terminal = Terminal{ .size = .{ .width = 10, .height = 5 } };
+    var state = State.init(&terminal, Buffer.fromSlice(gpa, data));
+    defer state.deinit();
+    try state.buffer.calculateLines();
+
+    state.move(.end);
+    // Top '6', cursor on '10'
+    try std.testing.expectEqual(Position{ .x = 0, .y = 4 }, state.cursor.pos);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 5 }, state.offset);
+
+    terminal.size.height = 15;
+    state.move(.down);
+    // Top '6', cursor on '10'
+    try std.testing.expectEqual(Position{ .x = 0, .y = 4 }, state.cursor.pos);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 5 }, state.offset);
 }
