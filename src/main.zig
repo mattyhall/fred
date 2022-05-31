@@ -1,5 +1,6 @@
 const std = @import("std");
 const Terminal = @import("Terminal.zig");
+const Style = @import("Style.zig");
 
 var log_file: std.fs.File = undefined;
 
@@ -207,6 +208,7 @@ pub const State = struct {
 
         // Line numbers and editor
         {
+            const line_style = Style{ .foreground = Style.grey };
             var iter = self.buffer.lineIterator();
             var i: u32 = 0;
             var skipped: u32 = 0;
@@ -217,7 +219,11 @@ pub const State = struct {
                 }
                 if (i >= self.size.height) break;
 
-                _ = try writer.print(" {:[1]}│", .{ i + skipped + 1, line_len });
+                if (i == self.cursor.pos.y) {
+                    try writer.print(" {:[1]}", .{ i + skipped + 1, line_len });
+                    try line_style.print(writer, "│", .{});
+                } else try line_style.print(writer, " {:[1]}│", .{ i + skipped + 1, line_len });
+
                 _ = try writer.write(line);
                 _ = try writer.write("\x1b[1E");
                 i += 1;
