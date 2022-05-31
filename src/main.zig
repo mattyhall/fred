@@ -135,10 +135,10 @@ pub const Movement = union(enum) {
     viewport_down,
     left,
     right,
-    end,
-    top,
-    line_start,
-    line_end,
+    goto_file_top,
+    goto_file_end,
+    goto_line_start,
+    goto_line_end,
 };
 
 pub const State = struct {
@@ -185,17 +185,17 @@ pub const State = struct {
                 self.cursor.pos.x + 1,
                 std.math.max(1, self.buffer.lineSpan(pos.y).width()) - 1,
             ),
-            .top => {
+            .goto_file_top => {
                 self.cursor.pos = .{ .x = 0, .y = 0 };
                 self.offset = .{ .x = 0, .y = 0 };
             },
-            .end => {
+            .goto_file_end => {
                 self.cursor.pos = .{ .x = 0, .y = std.math.min(self.buffer.lines.items.len - 1, self.size.height - 1) };
                 if (self.buffer.lines.items.len > self.size.height)
                     self.offset = .{ .x = 0, .y = @intCast(u32, self.buffer.lines.items.len) - self.size.height };
             },
-            .line_start => self.cursor.pos.x = 0,
-            .line_end => self.cursor.pos.x = self.buffer.lineSpan(pos.y).width() - 1,
+            .goto_line_start => self.cursor.pos.x = 0,
+            .goto_line_end => self.cursor.pos.x = self.buffer.lineSpan(pos.y).width() - 1,
             .viewport_up => {
                 if (self.offset.y == 0) return;
                 self.offset.y -= 1;
@@ -252,19 +252,19 @@ pub const InputHandler = struct {
                 .goto => switch (c) {
                     'e' => blk: {
                         self.mode = .{ .normal = .none };
-                        break :blk Movement.end;
+                        break :blk Movement.goto_file_end;
                     },
                     'g' => blk: {
                         self.mode = .{ .normal = .none };
-                        break :blk Movement.top;
+                        break :blk Movement.goto_file_top;
                     },
                     'h' => blk: {
                         self.mode = .{ .normal = .none };
-                        break :blk Movement.line_start;
+                        break :blk Movement.goto_line_start;
                     },
                     'l' => blk: {
                         self.mode = .{ .normal = .none };
-                        break :blk Movement.line_end;
+                        break :blk Movement.goto_line_end;
                     },
                     else => {
                         self.mode = .{ .normal = .none };
@@ -477,17 +477,17 @@ test "state goto top/bottom" {
     defer state.deinit();
     try state.buffer.calculateLines();
 
-    state.move(.end);
+    state.move(.goto_file_end);
     // Top '6', cursor on '10'
     try std.testing.expectEqual(Position{ .x = 0, .y = 4 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 5 }, state.offset);
 
-    state.move(.top);
+    state.move(.goto_file_top);
     try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.offset);
 
     terminal.size.height = 15;
-    state.move(.end);
+    state.move(.goto_file_end);
     // Top '1', cursor on '10'
     try std.testing.expectEqual(Position{ .x = 0, .y = 9 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.offset);
@@ -508,21 +508,21 @@ test "state goto start/end of line" {
     defer state.deinit();
     try state.buffer.calculateLines();
 
-    state.move(.line_end);
+    state.move(.goto_line_end);
     try std.testing.expectEqual(Position{ .x = 4, .y = 0 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.offset);
 
     state.move(.down);
-    state.move(.line_start);
+    state.move(.goto_line_start);
     try std.testing.expectEqual(Position{ .x = 0, .y = 1 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.offset);
 
-    state.move(.line_end);
+    state.move(.goto_line_end);
     try std.testing.expectEqual(Position{ .x = 4, .y = 1 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.offset);
 
     state.move(.down);
-    state.move(.line_end);
+    state.move(.goto_line_end);
     try std.testing.expectEqual(Position{ .x = 23, .y = 1 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 1 }, state.offset);
 }
@@ -542,7 +542,7 @@ test "state clamp line end" {
     defer state.deinit();
     try state.buffer.calculateLines();
 
-    state.move(.line_end);
+    state.move(.goto_line_end);
     try std.testing.expectEqual(Position{ .x = 23, .y = 0 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.offset);
 
@@ -635,7 +635,7 @@ test "state can't scroll past last line" {
     defer state.deinit();
     try state.buffer.calculateLines();
 
-    state.move(.end);
+    state.move(.goto_file_end);
     // Top '6', cursor on '10'
     try std.testing.expectEqual(Position{ .x = 0, .y = 4 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 5 }, state.offset);
