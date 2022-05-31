@@ -90,28 +90,6 @@ pub const Buffer = struct {
         return .{ .start = line_start, .end = line_end };
     }
 
-    pub fn draw(self: *const Self, writer: anytype, lines: u32, offset: Position) !void {
-        _ = try writer.write("\x1b[2J");
-        _ = try writer.write("\x1b[1;1H");
-
-        {
-            var iter = self.lineIterator();
-            var i: u32 = 0;
-            var skipped: u32 = 0;
-            while (iter.next()) |line| {
-                if (skipped < offset.y) {
-                    skipped += 1;
-                    continue;
-                }
-                if (i >= lines) break;
-
-                _ = try writer.write(line);
-                _ = try writer.write("\x1b[1E");
-                i += 1;
-            }
-        }
-    }
-
     pub fn deinit(self: *Self) void {
         self.data.deinit(self.gpa);
         self.lines.deinit(self.gpa);
@@ -121,11 +99,6 @@ pub const Buffer = struct {
 pub const Position = struct { x: u32, y: u32 };
 pub const Cursor = struct {
     pos: Position,
-
-    fn draw(self: Cursor, writer: anytype) !void {
-        _ = try writer.print("\x1b[{};{}H", .{ self.pos.y + 1, self.pos.x + 1 });
-        _ = try writer.write("\x1b[2 q"); // Block cursor
-    }
 };
 
 pub const Movement = union(enum) {
@@ -215,9 +188,9 @@ pub const State = struct {
             },
             .viewport_line_bottom => {
                 if (pos.y < self.size.height) {
-                  self.cursor.pos.y = self.offset.y;
-                  self.offset.y = 0;
-                  return;
+                    self.cursor.pos.y = self.offset.y;
+                    self.offset.y = 0;
+                    return;
                 }
 
                 self.offset.y -= self.size.height - self.cursor.pos.y - 1;
@@ -227,8 +200,32 @@ pub const State = struct {
     }
 
     pub fn draw(self: *const State, writer: anytype) !void {
-        try self.buffer.draw(writer, self.size.height, self.offset);
-        try self.cursor.draw(writer);
+        _ = try writer.write("\x1b[2J");
+        _ = try writer.write("\x1b[1;1H");
+
+        {
+            var iter = self.buffer.lineIterator();
+            var i: u32 = 0;
+            var skipped: u32 = 0;
+            while (iter.next()) |line| {
+                if (skipped < self.offset.y) {
+                    skipped += 1;
+                    continue;
+                }
+                if (i >= self.size.height) break;
+
+                _ = try writer.write(line);
+                _ = try writer.write("\x1b[1E");
+                i += 1;
+            }
+        }
+
+        // Cursor
+        _ = try writer.print("\x1b[{};{}H", .{
+            self.cursor.pos.y + 1,
+            self.cursor.pos.x + 1,
+        }); // Position
+        _ = try writer.write("\x1b[2 q"); // Block cursor
     }
 
     pub fn deinit(self: *State) void {
