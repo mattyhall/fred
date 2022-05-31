@@ -203,6 +203,9 @@ pub const State = struct {
         _ = try writer.write("\x1b[2J");
         _ = try writer.write("\x1b[1;1H");
 
+        const line_len = std.math.log10(self.buffer.lines.items.len) + 1;
+
+        // Line numbers and editor
         {
             var iter = self.buffer.lineIterator();
             var i: u32 = 0;
@@ -214,6 +217,7 @@ pub const State = struct {
                 }
                 if (i >= self.size.height) break;
 
+                _ = try writer.print(" {:[1]}│", .{ i + skipped + 1, line_len });
                 _ = try writer.write(line);
                 _ = try writer.write("\x1b[1E");
                 i += 1;
@@ -223,7 +227,7 @@ pub const State = struct {
         // Cursor
         _ = try writer.print("\x1b[{};{}H", .{
             self.cursor.pos.y + 1,
-            self.cursor.pos.x + 1,
+            self.cursor.pos.x + line_len + 2 + 1,
         }); // Position
         _ = try writer.write("\x1b[2 q"); // Block cursor
     }
