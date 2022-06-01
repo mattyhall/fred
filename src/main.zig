@@ -243,7 +243,7 @@ pub const State = struct {
     }
 };
 
-pub const NormalModeState = enum { none, goto, viewport };
+pub const NormalModeState = enum { none, goto, viewport, viewport_sticky };
 
 pub const Mode = union(enum) {
     normal: NormalModeState,
@@ -266,8 +266,12 @@ pub const InputHandler = struct {
                         self.mode = .{ .normal = .goto };
                         return null;
                     },
-                    'V' => {
+                    'v' => {
                         self.mode = .{ .normal = .viewport };
+                        return null;
+                    },
+                    'V' => {
+                        self.mode = .{ .normal = .viewport_sticky };
                         return null;
                     },
                     else => return null,
@@ -294,15 +298,21 @@ pub const InputHandler = struct {
                         return null;
                     },
                 },
-                .viewport => switch (c) {
-                    'j' => Movement.viewport_down,
-                    'k' => Movement.viewport_up,
-                    't' => Movement.viewport_line_top,
-                    'b' => Movement.viewport_line_bottom,
-                    else => {
+                .viewport, .viewport_sticky => {
+                    const movement = switch (c) {
+                        'j' => Movement.viewport_down,
+                        'k' => Movement.viewport_up,
+                        't' => Movement.viewport_line_top,
+                        'b' => Movement.viewport_line_bottom,
+                        else => {
+                            self.mode = .{ .normal = .none };
+                            return null;
+                        },
+                    };
+                    if (state == .viewport) {
                         self.mode = .{ .normal = .none };
-                        return null;
-                    },
+                    }
+                    return movement;
                 },
             },
             else => return null,
