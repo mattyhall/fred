@@ -81,6 +81,11 @@ pub const Buffer = struct {
         return .{ .lines = self.lines.items, .data = self.data.items, .i = 0 };
     }
 
+    pub fn lineAt(self: *const Self, line: u32) []const u8 {
+        const span = self.lineSpan(line);
+        return self.data.items[span.start .. span.end];
+    }
+
     pub fn lineSpan(self: *const Self, line: u32) Span {
         const line_start = self.lines.items[line];
         const line_end = if (line < self.lines.items.len - 1)
@@ -105,12 +110,13 @@ pub const Cursor = struct {
 pub const Movement = union(enum) {
     up,
     down,
+    left,
+    right,
+    word_right,
     viewport_up,
     viewport_down,
     viewport_line_top,
     viewport_line_bottom,
-    left,
-    right,
     goto_file_top,
     goto_file_end,
     goto_line_start,
@@ -161,6 +167,37 @@ pub const State = struct {
                 self.cursor.pos.x + 1,
                 std.math.max(1, self.buffer.lineSpan(pos.y).width()) - 1,
             ),
+            .word_right => {
+                var line = self.buffer.lineAt(pos.y);
+                const want_non_alpha = std.ascii.isAlNum(line[pos.x]);
+                var new_pos = pos;
+                var skipping_whitespace = false;
+                while (true) {
+                    if (new_pos.x >= line.len - 1) {
+                        if (new_pos.y >= self.buffer.lines.items.len - 1) break;
+
+                        self.move(.down);
+                        self.move(.goto_line_start);
+                        break;
+                    }
+
+                    self.move(.right);
+                    new_pos = self.bufferCursorPos();
+                    const char = line[new_pos.x];
+
+                    if (std.ascii.isSpace(char)) {
+                        skipping_whitespace = true;
+                        continue;
+                    }
+
+                    if (skipping_whitespace and !std.ascii.isSpace(char))
+                        break;
+
+                    if ((want_non_alpha and !std.ascii.isAlNum(char)) or
+                        (!want_non_alpha and std.ascii.isAlNum(char)))
+                        break;
+                }
+            },
             .goto_file_top => {
                 self.cursor.pos = .{ .x = 0, .y = 0 };
                 self.offset = .{ .x = 0, .y = 0 };
@@ -262,6 +299,7 @@ pub const InputHandler = struct {
                     'k' => Movement.up,
                     'l' => Movement.right,
                     'h' => Movement.left,
+                    'w' => Movement.word_right,
                     'g' => {
                         self.mode = .{ .normal = .goto };
                         return null;
@@ -444,6 +482,45 @@ test "state basic cursor movement" {
     state.move(.left);
     state.move(.left);
     try std.testing.expectEqual(Position{ .x = 1, .y = 1 }, state.cursor.pos);
+}
+
+test "state word movement" {
+    var gpa = std.testing.allocator;
+    const lit =
+        \\here are words ("quote")
+        \\test@test
+    ;
+    var data = try gpa.alloc(u8, lit.len);
+    std.mem.copy(u8, data, lit);
+
+    const terminal = Terminal{ .size = .{ .width = 50, .height = 6 } };
+    var state = State.init(&terminal, Buffer.fromSlice(gpa, data));
+    defer state.deinit();
+    try state.buffer.calculateLines();
+
+    state.move(.word_right);
+    try std.testing.expectEqual(Position{ .x = 5, .y = 0 }, state.cursor.pos);
+
+    state.move(.word_right);
+    try std.testing.expectEqual(Position{ .x = 9, .y = 0 }, state.cursor.pos);
+
+    state.move(.word_right);
+    try std.testing.expectEqual(Position{ .x = 15, .y = 0 }, state.cursor.pos);
+
+    state.move(.word_right);
+    try std.testing.expectEqual(Position{ .x = 17, .y = 0 }, state.cursor.pos);
+
+    state.move(.word_right);
+    try std.testing.expectEqual(Position{ .x = 22, .y = 0 }, state.cursor.pos);
+
+    state.move(.word_right);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 1 }, state.cursor.pos);
+
+    state.move(.word_right);
+    try std.testing.expectEqual(Position{ .x = 4, .y = 1 }, state.cursor.pos);
+
+    state.move(.word_right);
+    try std.testing.expectEqual(Position{ .x = 5, .y = 1 }, state.cursor.pos);
 }
 
 test "state viewport" {
