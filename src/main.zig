@@ -323,15 +323,23 @@ pub const InputHandler = struct {
 pub fn main() anyerror!void {
     try setupLogging();
 
+    var stdout = std.io.bufferedWriter(std.io.getStdOut().writer());
+    var writer = stdout.writer();
+
+    if (std.os.argv.len != 2) {
+        _ = try writer.write("please pass an argument");
+        try stdout.flush();
+        std.os.exit(1);
+    }
+
+    const path = std.mem.span(std.os.argv[1]);
+
     var terminal = try Terminal.init();
     var gpa = std.heap.GeneralPurposeAllocator(.{}){ .backing_allocator = std.heap.c_allocator };
     var allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    var stdout = std.io.bufferedWriter(std.io.getStdOut().writer());
-    var writer = stdout.writer();
-
-    var state = State.init(terminal, try Buffer.fromFile(allocator, "../zig/src/main.zig"));
+    var state = State.init(terminal, try Buffer.fromFile(allocator, path));
     defer state.deinit();
     try state.buffer.calculateLines();
 
