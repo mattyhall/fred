@@ -121,6 +121,8 @@ pub const Movement = union(enum) {
     right,
     word_left,
     word_right,
+    page_up,
+    page_down,
     viewport_up,
     viewport_down,
     viewport_centre,
@@ -263,6 +265,15 @@ pub const State = struct {
             },
             .goto_line_start => self.cursor.pos.x = 0,
             .goto_line_end => self.cursor.pos.x = self.buffer.lineSpan(pos.y).width() - 1,
+            .page_up => {
+                self.offset.y = std.math.max(self.offset.y, self.size.height - 1) - (self.size.height - 1);
+                if (pos.y >= self.size.height)
+                    self.cursor.pos.y = self.size.height - 1;
+            },
+            .page_down => {
+                self.offset.y = std.math.min(self.offset.y + self.size.height, @intCast(u32, self.buffer.lines.items.len - 1)) - 1;
+                self.cursor.pos.y = 0;
+            },
             .viewport_up => {
                 if (self.offset.y == 0) return;
                 self.offset.y -= 1;
@@ -373,6 +384,8 @@ pub const InputHandler = struct {
                     'h' => Movement.left,
                     'w' => Movement.word_right,
                     'b' => Movement.word_left,
+                    2 => Movement.page_up,
+                    6 => Movement.page_down,
                     'g' => {
                         self.mode = .{ .normal = .goto };
                         return null;
@@ -749,6 +762,50 @@ test "state clamp line end" {
     state.move(.down);
     try std.testing.expectEqual(Position{ .x = 1, .y = 2 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.offset);
+}
+
+test "state page up/down" {
+    var gpa = std.testing.allocator;
+    const lit =
+        \\1
+        \\2
+        \\3
+        \\4
+        \\5
+        \\6
+        \\7
+        \\8
+        \\9
+        \\10
+    ;
+    var data = try gpa.alloc(u8, lit.len);
+    std.mem.copy(u8, data, lit);
+
+    var terminal = Terminal{ .size = .{ .width = 10, .height = 5 } };
+    var state = State.init(&terminal, Buffer.fromSlice(gpa, data));
+    defer state.deinit();
+    try state.buffer.calculateLines();
+
+    state.move(.down);
+    state.move(.page_up);
+    // Top '1', cursor on '2'
+    try std.testing.expectEqual(Position{ .x = 0, .y = 1 }, state.cursor.pos);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.offset);
+
+    state.move(.page_down);
+    // Top '5', cursor on '5'
+    try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.cursor.pos);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 4 }, state.offset);
+
+    state.move(.page_down);
+    // Top '9', cursor on '9'
+    try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.cursor.pos);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 8 }, state.offset);
+
+    state.move(.page_up);
+    // Top '5', cursor on '10'
+    try std.testing.expectEqual(Position{ .x = 0, .y = 4 }, state.cursor.pos);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 4 }, state.offset);
 }
 
 test "state viewport up/down" {
