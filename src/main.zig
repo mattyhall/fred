@@ -28,6 +28,13 @@ pub const Span = struct {
     }
 };
 
+fn startOfWord(previous: u8, current: u8) bool {
+    const c_alpha = std.ascii.isAlNum(current);
+    const p_alpha = std.ascii.isAlNum(previous);
+    const p_space = std.ascii.isSpace(previous);
+    return (c_alpha and (p_space or !p_alpha)) or (!c_alpha and (p_space or p_alpha));
+}
+
 pub const Buffer = struct {
     gpa: std.mem.Allocator,
     data: std.ArrayListUnmanaged(u8),
@@ -83,7 +90,7 @@ pub const Buffer = struct {
 
     pub fn lineAt(self: *const Self, line: u32) []const u8 {
         const span = self.lineSpan(line);
-        return self.data.items[span.start .. span.end];
+        return self.data.items[span.start..span.end];
     }
 
     pub fn lineSpan(self: *const Self, line: u32) Span {
@@ -112,6 +119,7 @@ pub const Movement = union(enum) {
     down,
     left,
     right,
+    word_left,
     word_right,
     viewport_up,
     viewport_down,
@@ -197,6 +205,51 @@ pub const State = struct {
                         (!want_non_alpha and std.ascii.isAlNum(char)))
                         break;
                 }
+            },
+            .word_left => {
+                var line = self.buffer.lineAt(pos.y);
+                const line_start = pos.x == 0;
+                if (line_start) {
+                    if (pos.y == 0) return;
+
+                    self.move(.up);
+                    self.move(.goto_line_end);
+                }
+
+                var new_pos = self.bufferCursorPos();
+                line = self.buffer.lineAt(new_pos.y);
+                var word_start = startOfWord(line[new_pos.x - 1], line[new_pos.x]);
+                if (word_start) {
+                    // Find first character of the previous word
+                    while (true) {
+                        self.move(.left);
+
+                        new_pos = self.bufferCursorPos();
+                        if (new_pos.x == 0) return;
+                        if (!std.ascii.isSpace(line[new_pos.x])) break;
+                    }
+                }
+
+                new_pos = self.bufferCursorPos();
+                const starting_char = line[new_pos.x];
+                word_start = startOfWord(line[new_pos.x - 1], starting_char);
+                if (word_start) return;
+
+                // Find start of word
+                while (true) {
+                    new_pos = self.bufferCursorPos();
+                    if (new_pos.x == 0) return;
+
+                    const char = line[new_pos.x];
+                    if (std.ascii.isAlNum(starting_char) and !std.ascii.isAlNum(char))
+                        break;
+                    if (!std.ascii.isAlNum(starting_char) and (std.ascii.isAlNum(char) or std.ascii.isSpace(char)))
+                        break;
+
+                    self.move(.left);
+                }
+
+                self.move(.right);
             },
             .goto_file_top => {
                 self.cursor.pos = .{ .x = 0, .y = 0 };
@@ -300,6 +353,7 @@ pub const InputHandler = struct {
                     'l' => Movement.right,
                     'h' => Movement.left,
                     'w' => Movement.word_right,
+                    'b' => Movement.word_left,
                     'g' => {
                         self.mode = .{ .normal = .goto };
                         return null;
@@ -498,29 +552,27 @@ test "state word movement" {
     defer state.deinit();
     try state.buffer.calculateLines();
 
-    state.move(.word_right);
-    try std.testing.expectEqual(Position{ .x = 5, .y = 0 }, state.cursor.pos);
+    const positions = [_]Position{
+        .{ .x = 5, .y = 0 },
+        .{ .x = 9, .y = 0 },
+        .{ .x = 15, .y = 0 },
+        .{ .x = 17, .y = 0 },
+        .{ .x = 22, .y = 0 },
+        .{ .x = 0, .y = 1 },
+        .{ .x = 4, .y = 1 },
+        .{ .x = 5, .y = 1 },
+    };
 
-    state.move(.word_right);
-    try std.testing.expectEqual(Position{ .x = 9, .y = 0 }, state.cursor.pos);
-
-    state.move(.word_right);
-    try std.testing.expectEqual(Position{ .x = 15, .y = 0 }, state.cursor.pos);
-
-    state.move(.word_right);
-    try std.testing.expectEqual(Position{ .x = 17, .y = 0 }, state.cursor.pos);
-
-    state.move(.word_right);
-    try std.testing.expectEqual(Position{ .x = 22, .y = 0 }, state.cursor.pos);
-
-    state.move(.word_right);
-    try std.testing.expectEqual(Position{ .x = 0, .y = 1 }, state.cursor.pos);
-
-    state.move(.word_right);
-    try std.testing.expectEqual(Position{ .x = 4, .y = 1 }, state.cursor.pos);
-
-    state.move(.word_right);
-    try std.testing.expectEqual(Position{ .x = 5, .y = 1 }, state.cursor.pos);
+    var i: isize = 0;
+    while (i < positions.len) : (i += 1) {
+        state.move(.word_right);
+        try std.testing.expectEqual(positions[@intCast(usize, i)], state.cursor.pos);
+    }
+    i -= 2;
+    while (i >= 0) : (i -= 1) {
+        state.move(.word_left);
+        try std.testing.expectEqual(positions[@intCast(usize, i)], state.cursor.pos);
+    }
 }
 
 test "state viewport" {
