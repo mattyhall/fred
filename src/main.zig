@@ -123,6 +123,7 @@ pub const Movement = union(enum) {
     word_right,
     viewport_up,
     viewport_down,
+    viewport_centre,
     viewport_line_top,
     viewport_line_bottom,
     goto_file_top,
@@ -273,6 +274,23 @@ pub const State = struct {
                 self.offset.y += 1;
                 if (self.cursor.pos.y > 0) self.cursor.pos.y -= 1;
             },
+            .viewport_centre => {
+                const centre = self.size.height / 2;
+                if (self.cursor.pos.y == centre) return;
+
+                if (self.cursor.pos.y > centre) {
+                    const diff = self.cursor.pos.y - centre;
+                    self.offset.y += diff;
+                    self.cursor.pos.y -= diff;
+                    return;
+                }
+
+                var diff = centre - self.cursor.pos.y;
+                if (diff > self.offset.y)
+                    diff = self.offset.y;
+                self.offset.y -= diff;
+                self.cursor.pos.y += diff;
+            },
             .viewport_line_top => {
                 self.offset.y += self.cursor.pos.y;
                 self.cursor.pos.y = 0;
@@ -395,6 +413,7 @@ pub const InputHandler = struct {
                         'j' => Movement.viewport_down,
                         'k' => Movement.viewport_up,
                         't' => Movement.viewport_line_top,
+                        'c' => Movement.viewport_centre,
                         'b' => Movement.viewport_line_bottom,
                         else => {
                             self.mode = .{ .normal = .none };
@@ -784,7 +803,7 @@ test "state viewport up/down" {
     try std.testing.expectEqual(Position{ .x = 0, .y = 4 }, state.offset);
 }
 
-test "state viewport line to top/bottom" {
+test "state viewport line to top/bottom/centre" {
     var gpa = std.testing.allocator;
     const lit =
         \\1
@@ -825,6 +844,19 @@ test "state viewport line to top/bottom" {
     // Top '1', cursor '3'
     try std.testing.expectEqual(Position{ .x = 0, .y = 2 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.offset);
+
+    state.move(.viewport_centre);
+    // Top '1', cursor '3'
+    try std.testing.expectEqual(Position{ .x = 0, .y = 2 }, state.cursor.pos);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.offset);
+
+    state.move(.down);
+    state.move(.down);
+    // Top '1', cursor '5'
+    state.move(.viewport_centre);
+    // Top '3', cursor '5'
+    try std.testing.expectEqual(Position{ .x = 0, .y = 2 }, state.cursor.pos);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 2 }, state.offset);
 }
 
 test "state can't scroll past last line" {
