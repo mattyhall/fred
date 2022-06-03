@@ -297,7 +297,8 @@ pub const State = struct {
             },
             .viewport_line_bottom => {
                 if (pos.y < self.size.height) {
-                    self.cursor.pos.y = self.offset.y;
+                    const line = self.cursor.pos.y + self.offset.y;
+                    self.cursor.pos.y = line;
                     self.offset.y = 0;
                     return;
                 }
