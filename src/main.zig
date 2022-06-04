@@ -143,9 +143,11 @@ pub const Movement = union(enum) {
 pub const State = struct {
     cursor: Cursor = .{ .pos = .{ .x = 0, .y = 0 } },
     offset: Position = .{ .x = 0, .y = 0 },
+
     terminal_size: *const Terminal.Size,
     buffer: Buffer,
     input_handler: InputHandler,
+    have_command_line: bool = true,
 
     pub fn init(gpa: std.mem.Allocator, terminal: *const Terminal, buffer: Buffer) State {
         return .{ .terminal_size = &terminal.size, .buffer = buffer, .input_handler = InputHandler.init(gpa) };
@@ -154,7 +156,8 @@ pub const State = struct {
     /// Returns the size allocated to the buffer
     pub fn size(self: *const State) Terminal.Size {
         var sz = self.terminal_size.*;
-        sz.height -= 1;
+        if (self.have_command_line)
+            sz.height -= 1;
         return sz;
     }
 
@@ -586,6 +589,7 @@ test "state basic cursor movement" {
     const terminal = Terminal{ .size = .{ .width = 6, .height = 6 } };
     var state = State.init(gpa, &terminal, Buffer.fromSlice(gpa, data));
     defer state.deinit();
+    state.have_command_line = false;
     try state.buffer.calculateLines();
 
     state.move(.left);
@@ -629,6 +633,7 @@ test "state word movement" {
     const terminal = Terminal{ .size = .{ .width = 50, .height = 6 } };
     var state = State.init(gpa, &terminal, Buffer.fromSlice(gpa, data));
     defer state.deinit();
+    state.have_command_line = false;
     try state.buffer.calculateLines();
 
     const positions = [_]Position{
@@ -670,6 +675,7 @@ test "state viewport" {
     const terminal = Terminal{ .size = .{ .width = 6, .height = 3 } };
     var state = State.init(gpa, &terminal, Buffer.fromSlice(gpa, data));
     defer state.deinit();
+    state.have_command_line = false;
     try state.buffer.calculateLines();
 
     state.move(.down);
@@ -726,6 +732,7 @@ test "state goto top/bottom" {
     var terminal = Terminal{ .size = .{ .width = 10, .height = 5 } };
     var state = State.init(gpa, &terminal, Buffer.fromSlice(gpa, data));
     defer state.deinit();
+    state.have_command_line = false;
     try state.buffer.calculateLines();
 
     state.move(.goto_file_end);
@@ -757,6 +764,7 @@ test "state goto start/end of line" {
     var terminal = Terminal{ .size = .{ .width = 100, .height = 2 } };
     var state = State.init(gpa, &terminal, Buffer.fromSlice(gpa, data));
     defer state.deinit();
+    state.have_command_line = false;
     try state.buffer.calculateLines();
 
     state.move(.goto_line_end);
@@ -791,6 +799,7 @@ test "state clamp line end" {
     var terminal = Terminal{ .size = .{ .width = 100, .height = 3 } };
     var state = State.init(gpa, &terminal, Buffer.fromSlice(gpa, data));
     defer state.deinit();
+    state.have_command_line = false;
     try state.buffer.calculateLines();
 
     state.move(.goto_line_end);
@@ -830,6 +839,7 @@ test "state page up/down" {
     var terminal = Terminal{ .size = .{ .width = 10, .height = 5 } };
     var state = State.init(gpa, &terminal, Buffer.fromSlice(gpa, data));
     defer state.deinit();
+    state.have_command_line = false;
     try state.buffer.calculateLines();
 
     state.move(.down);
@@ -874,6 +884,7 @@ test "state viewport up/down" {
     var terminal = Terminal{ .size = .{ .width = 100, .height = 5 } };
     var state = State.init(gpa, &terminal, Buffer.fromSlice(gpa, data));
     defer state.deinit();
+    state.have_command_line = false;
     try state.buffer.calculateLines();
 
     state.move(.viewport_up);
@@ -927,6 +938,7 @@ test "state viewport line to top/bottom/centre" {
     var terminal = Terminal{ .size = .{ .width = 100, .height = 5 } };
     var state = State.init(gpa, &terminal, Buffer.fromSlice(gpa, data));
     defer state.deinit();
+    state.have_command_line = false;
     try state.buffer.calculateLines();
 
     state.move(.viewport_line_top);
@@ -984,6 +996,7 @@ test "state can't scroll past last line" {
     var terminal = Terminal{ .size = .{ .width = 10, .height = 5 } };
     var state = State.init(gpa, &terminal, Buffer.fromSlice(gpa, data));
     defer state.deinit();
+    state.have_command_line = false;
     try state.buffer.calculateLines();
 
     state.move(.goto_file_end);
