@@ -120,6 +120,11 @@ pub const Cursor = struct {
     pos: Position,
 };
 
+pub const Instruction = union(enum) {
+    movement: Movement,
+    command: std.ArrayList(u8),
+};
+
 pub const Movement = union(enum) {
     up,
     down,
@@ -165,7 +170,17 @@ pub const State = struct {
         return .{ .x = self.cursor.pos.x + self.offset.x, .y = self.cursor.pos.y + self.offset.y };
     }
 
-    pub fn move(self: *State, movement: Movement) void {
+    fn handleInput(self: *State, ch: u8) !void {
+        const input = (try self.input_handler.handleInput(ch)) orelse return;
+        switch (input) {
+            .movement => |m| self.move(m),
+            .command => |al| {
+                if (std.mem.eql(u8, "q", al.items)) std.os.exit(0);
+            },
+        }
+    }
+
+    fn move(self: *State, movement: Movement) void {
         const pos = self.bufferCursorPos();
         switch (movement) {
             .up => {
@@ -409,89 +424,99 @@ pub const InputHandler = struct {
         self.cmd.deinit(self.gpa);
     }
 
-    pub fn handleInput(self: *InputHandler, c: u8) !?Movement {
-        return switch (self.mode) {
-            .normal => |state| switch (state) {
-                .none => switch (c) {
-                    'j' => Movement.down,
-                    'k' => Movement.up,
-                    'l' => Movement.right,
-                    'h' => Movement.left,
-                    'w' => Movement.word_right,
-                    'b' => Movement.word_left,
-                    2 => Movement.page_up,
-                    6 => Movement.page_down,
-                    'g' => {
-                        self.mode = .{ .normal = .goto };
-                        return null;
+    pub fn handleInput(self: *InputHandler, c: u8) !?Instruction {
+        return Instruction{
+            .movement = switch (self.mode) {
+                .normal => |state| switch (state) {
+                    .none => switch (c) {
+                        'j' => Movement.down,
+                        'k' => Movement.up,
+                        'l' => Movement.right,
+                        'h' => Movement.left,
+                        'w' => Movement.word_right,
+                        'b' => Movement.word_left,
+                        2 => Movement.page_up,
+                        6 => Movement.page_down,
+                        'g' => {
+                            self.mode = .{ .normal = .goto };
+                            return null;
+                        },
+                        'v' => {
+                            self.mode = .{ .normal = .viewport };
+                            return null;
+                        },
+                        'V' => {
+                            self.mode = .{ .normal = .viewport_sticky };
+                            return null;
+                        },
+                        ':' => {
+                            self.mode = .command;
+                            return null;
+                        },
+                        else => return null,
                     },
-                    'v' => {
-                        self.mode = .{ .normal = .viewport };
-                        return null;
-                    },
-                    'V' => {
-                        self.mode = .{ .normal = .viewport_sticky };
-                        return null;
-                    },
-                    ':' => {
-                        self.mode = .command;
-                        return null;
-                    },
-                    else => return null,
-                },
-                .goto => switch (c) {
-                    'e' => blk: {
-                        self.mode = .{ .normal = .none };
-                        break :blk Movement.goto_file_end;
-                    },
-                    'g' => blk: {
-                        self.mode = .{ .normal = .none };
-                        break :blk Movement.goto_file_top;
-                    },
-                    'h' => blk: {
-                        self.mode = .{ .normal = .none };
-                        break :blk Movement.goto_line_start;
-                    },
-                    'l' => blk: {
-                        self.mode = .{ .normal = .none };
-                        break :blk Movement.goto_line_end;
-                    },
-                    else => {
-                        self.mode = .{ .normal = .none };
-                        return null;
-                    },
-                },
-                .viewport, .viewport_sticky => {
-                    const movement = switch (c) {
-                        'j' => Movement.viewport_down,
-                        'k' => Movement.viewport_up,
-                        't' => Movement.viewport_line_top,
-                        'c' => Movement.viewport_centre,
-                        'b' => Movement.viewport_line_bottom,
+                    .goto => switch (c) {
+                        'e' => blk: {
+                            self.mode = .{ .normal = .none };
+                            break :blk Movement.goto_file_end;
+                        },
+                        'g' => blk: {
+                            self.mode = .{ .normal = .none };
+                            break :blk Movement.goto_file_top;
+                        },
+                        'h' => blk: {
+                            self.mode = .{ .normal = .none };
+                            break :blk Movement.goto_line_start;
+                        },
+                        'l' => blk: {
+                            self.mode = .{ .normal = .none };
+                            break :blk Movement.goto_line_end;
+                        },
                         else => {
                             self.mode = .{ .normal = .none };
                             return null;
                         },
-                    };
-                    if (state == .viewport) {
+                    },
+                    .viewport, .viewport_sticky => b: {
+                        const movement = switch (c) {
+                            'j' => Movement.viewport_down,
+                            'k' => Movement.viewport_up,
+                            't' => Movement.viewport_line_top,
+                            'c' => Movement.viewport_centre,
+                            'b' => Movement.viewport_line_bottom,
+                            else => {
+                                self.mode = .{ .normal = .none };
+                                return null;
+                            },
+                        };
+                        if (state == .viewport) {
+                            self.mode = .{ .normal = .none };
+                        }
+                        break :b movement;
+                    },
+                },
+                .command => switch (c) {
+                    13 => {
+                        // RET
+                        const al = self.cmd.toManaged(self.gpa);
+                        self.cmd = .{};
                         self.mode = .{ .normal = .none };
-                    }
-                    return movement;
+                        return Instruction{ .command = al };
+                    },
+                    27 => {
+                        // ESC
+                        self.mode = .{ .normal = .none };
+                        self.cmd.clearRetainingCapacity();
+                        return null;
+                    },
+                    else => {
+                        if (c < 32 or c > 126) return null;
+                        try self.cmd.append(self.gpa, c);
+                        return null;
+                    },
                 },
+                else => return null,
             },
-            .command => switch (c) {
-                27 => {
-                    self.mode = .{ .normal = .none };
-                    self.cmd.clearRetainingCapacity();
-                    return null;
-                },
-                else => {
-                    if (c < 32 or c > 126) return null;
-                    try self.cmd.append(self.gpa, c);
-                    return null;
-                },
-            },
-            else => return null,
         };
     }
 };
@@ -531,10 +556,7 @@ pub fn main() anyerror!void {
         if (poll_fds[0].revents & std.os.POLL.IN != 0) {
             const input = terminal.getInput();
             for (input) |ch| {
-                if (ch == 'q') std.os.exit(0);
-                if (try state.input_handler.handleInput(ch)) |movement| {
-                    state.move(movement);
-                }
+                try state.handleInput(ch);
             }
 
             try state.draw(writer);
