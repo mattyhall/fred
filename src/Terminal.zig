@@ -21,7 +21,7 @@ original_terminal_settings: c.struct_termios = undefined,
 events: [MAX_EVENTS_PER_FRAME]u8 = undefined,
 fd: std.os.fd_t = undefined,
 
-fn cleanupTerminal() callconv(.C) void {
+pub fn cleanupTerminal() callconv(.C) void {
     _ = std.io.getStdOut().writer().write("\x1b[0;0H\x1b[2J") catch {
         @panic("could not reset display");
     };

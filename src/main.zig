@@ -4,6 +4,12 @@ const Style = @import("Style.zig");
 
 var log_file: std.fs.File = undefined;
 
+pub fn panic(msg: []const u8, error_return_trace: ?*std.builtin.StackTrace) noreturn {
+    Terminal.cleanupTerminal();
+    const first_trace_addr = @returnAddress();
+    std.debug.panicImpl(error_return_trace, first_trace_addr, msg);
+}
+
 fn setupLogging() !void {
     log_file = try std.fs.cwd().createFile("fred.log", .{});
 }
