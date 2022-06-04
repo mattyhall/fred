@@ -143,11 +143,19 @@ pub const Movement = union(enum) {
 pub const State = struct {
     cursor: Cursor = .{ .pos = .{ .x = 0, .y = 0 } },
     offset: Position = .{ .x = 0, .y = 0 },
-    size: *const Terminal.Size,
+    terminal_size: *const Terminal.Size,
     buffer: Buffer,
+    input_handler: InputHandler,
 
-    pub fn init(terminal: *const Terminal, buffer: Buffer) State {
-        return .{ .size = &terminal.size, .buffer = buffer };
+    pub fn init(gpa: std.mem.Allocator, terminal: *const Terminal, buffer: Buffer) State {
+        return .{ .terminal_size = &terminal.size, .buffer = buffer, .input_handler = InputHandler.init(gpa) };
+    }
+
+    /// Returns the size allocated to the buffer
+    pub fn size(self: *const State) Terminal.Size {
+        var sz = self.terminal_size.*;
+        sz.height -= 1;
+        return sz;
     }
 
     pub fn bufferCursorPos(self: *const State) Position {
@@ -168,7 +176,7 @@ pub const State = struct {
                 )) - 1;
             },
             .down => {
-                if (self.cursor.pos.y >= self.size.height - 1) {
+                if (self.cursor.pos.y >= self.size().height - 1) {
                     if (pos.y < self.buffer.lines.items.len - 1)
                         self.offset.y += 1;
                 } else if (pos.y < self.buffer.lines.items.len - 1) {
@@ -265,25 +273,25 @@ pub const State = struct {
                 self.offset = .{ .x = 0, .y = 0 };
             },
             .goto_file_end => {
-                self.cursor.pos = .{ .x = 0, .y = std.math.min(self.buffer.lines.items.len - 1, self.size.height - 1) };
-                if (self.buffer.lines.items.len > self.size.height)
-                    self.offset = .{ .x = 0, .y = @intCast(u32, self.buffer.lines.items.len) - self.size.height };
+                self.cursor.pos = .{ .x = 0, .y = std.math.min(self.buffer.lines.items.len - 1, self.size().height - 1) };
+                if (self.buffer.lines.items.len > self.size().height)
+                    self.offset = .{ .x = 0, .y = @intCast(u32, self.buffer.lines.items.len) - self.size().height };
             },
             .goto_line_start => self.cursor.pos.x = 0,
             .goto_line_end => self.cursor.pos.x = self.buffer.lineSpan(pos.y).width() - 1,
             .page_up => {
-                self.offset.y = std.math.max(self.offset.y, self.size.height - 1) - (self.size.height - 1);
-                if (pos.y >= self.size.height)
-                    self.cursor.pos.y = self.size.height - 1;
+                self.offset.y = std.math.max(self.offset.y, self.size().height - 1) - (self.size().height - 1);
+                if (pos.y >= self.size().height)
+                    self.cursor.pos.y = self.size().height - 1;
             },
             .page_down => {
-                self.offset.y = std.math.min(self.offset.y + self.size.height, @intCast(u32, self.buffer.lines.items.len - 1)) - 1;
+                self.offset.y = std.math.min(self.offset.y + self.size().height, @intCast(u32, self.buffer.lines.items.len - 1)) - 1;
                 self.cursor.pos.y = 0;
             },
             .viewport_up => {
                 if (self.offset.y == 0) return;
                 self.offset.y -= 1;
-                if (self.cursor.pos.y < self.size.height - 1) self.cursor.pos.y += 1;
+                if (self.cursor.pos.y < self.size().height - 1) self.cursor.pos.y += 1;
             },
             .viewport_down => {
                 if (self.offset.y >= self.buffer.lines.items.len - 1) return;
@@ -292,7 +300,7 @@ pub const State = struct {
                 if (self.cursor.pos.y > 0) self.cursor.pos.y -= 1;
             },
             .viewport_centre => {
-                const centre = self.size.height / 2;
+                const centre = self.size().height / 2;
                 if (self.cursor.pos.y == centre) return;
 
                 if (self.cursor.pos.y > centre) {
@@ -313,15 +321,15 @@ pub const State = struct {
                 self.cursor.pos.y = 0;
             },
             .viewport_line_bottom => {
-                if (pos.y < self.size.height) {
+                if (pos.y < self.size().height) {
                     const line = self.cursor.pos.y + self.offset.y;
                     self.cursor.pos.y = line;
                     self.offset.y = 0;
                     return;
                 }
 
-                self.offset.y -= self.size.height - self.cursor.pos.y - 1;
-                self.cursor.pos.y = self.size.height - 1;
+                self.offset.y -= self.size().height - self.cursor.pos.y - 1;
+                self.cursor.pos.y = self.size().height - 1;
             },
         }
     }
@@ -343,7 +351,7 @@ pub const State = struct {
                     skipped += 1;
                     continue;
                 }
-                if (i >= self.size.height) break;
+                if (i >= self.size().height) break;
 
                 if (i == self.cursor.pos.y) {
                     try writer.print(" {:[1]}", .{ i + skipped + 1, line_len });
@@ -356,16 +364,24 @@ pub const State = struct {
             }
         }
 
-        // Cursor
-        _ = try writer.print("\x1b[{};{}H", .{
-            self.cursor.pos.y + 1,
-            self.cursor.pos.x + line_len + 2 + 1,
-        }); // Position
-        _ = try writer.write("\x1b[2 q"); // Block cursor
+        // Command
+        if (self.input_handler.mode == .command) {
+            try writer.print(":{s}", .{self.input_handler.cmd.items});
+        } else {
+            // Cursor position
+            _ = try writer.print("\x1b[{};{}H", .{
+                self.cursor.pos.y + 1,
+                self.cursor.pos.x + line_len + 2 + 1,
+            });
+        }
+
+        // Block cursor
+        _ = try writer.write("\x1b[2 q");
     }
 
     pub fn deinit(self: *State) void {
         self.buffer.deinit();
+        self.input_handler.deinit();
     }
 };
 
@@ -378,9 +394,19 @@ pub const Mode = union(enum) {
 };
 
 pub const InputHandler = struct {
+    gpa: std.mem.Allocator,
     mode: Mode = .{ .normal = .none },
+    cmd: std.ArrayListUnmanaged(u8),
 
-    pub fn handleInput(self: *InputHandler, c: u8) ?Movement {
+    pub fn init(allocator: std.mem.Allocator) InputHandler {
+        return .{ .gpa = allocator, .cmd = std.ArrayListUnmanaged(u8){} };
+    }
+
+    pub fn deinit(self: *InputHandler) void {
+        self.cmd.deinit(self.gpa);
+    }
+
+    pub fn handleInput(self: *InputHandler, c: u8) !?Movement {
         return switch (self.mode) {
             .normal => |state| switch (state) {
                 .none => switch (c) {
@@ -402,6 +428,10 @@ pub const InputHandler = struct {
                     },
                     'V' => {
                         self.mode = .{ .normal = .viewport_sticky };
+                        return null;
+                    },
+                    ':' => {
+                        self.mode = .command;
                         return null;
                     },
                     else => return null,
@@ -446,6 +476,18 @@ pub const InputHandler = struct {
                     return movement;
                 },
             },
+            .command => switch (c) {
+                27 => {
+                    self.mode = .{ .normal = .none };
+                    self.cmd.clearRetainingCapacity();
+                    return null;
+                },
+                else => {
+                    if (c < 32 or c > 126) return null;
+                    try self.cmd.append(self.gpa, c);
+                    return null;
+                },
+            },
             else => return null,
         };
     }
@@ -470,11 +512,9 @@ pub fn main() anyerror!void {
     var allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    var state = State.init(terminal, try Buffer.fromFile(allocator, path));
+    var state = State.init(allocator, terminal, try Buffer.fromFile(allocator, path));
     defer state.deinit();
     try state.buffer.calculateLines();
-
-    var inputHandler = InputHandler{};
 
     while (true) {
         var poll_fds = [_]std.os.pollfd{
@@ -489,7 +529,7 @@ pub fn main() anyerror!void {
             const input = terminal.getInput();
             for (input) |ch| {
                 if (ch == 'q') std.os.exit(0);
-                if (inputHandler.handleInput(ch)) |movement| {
+                if (try state.input_handler.handleInput(ch)) |movement| {
                     state.move(movement);
                 }
             }
@@ -544,7 +584,7 @@ test "state basic cursor movement" {
     std.mem.copy(u8, data, lit);
 
     const terminal = Terminal{ .size = .{ .width = 6, .height = 6 } };
-    var state = State.init(&terminal, Buffer.fromSlice(gpa, data));
+    var state = State.init(gpa, &terminal, Buffer.fromSlice(gpa, data));
     defer state.deinit();
     try state.buffer.calculateLines();
 
@@ -587,7 +627,7 @@ test "state word movement" {
     std.mem.copy(u8, data, lit);
 
     const terminal = Terminal{ .size = .{ .width = 50, .height = 6 } };
-    var state = State.init(&terminal, Buffer.fromSlice(gpa, data));
+    var state = State.init(gpa, &terminal, Buffer.fromSlice(gpa, data));
     defer state.deinit();
     try state.buffer.calculateLines();
 
@@ -628,7 +668,7 @@ test "state viewport" {
     std.mem.copy(u8, data, lit);
 
     const terminal = Terminal{ .size = .{ .width = 6, .height = 3 } };
-    var state = State.init(&terminal, Buffer.fromSlice(gpa, data));
+    var state = State.init(gpa, &terminal, Buffer.fromSlice(gpa, data));
     defer state.deinit();
     try state.buffer.calculateLines();
 
@@ -684,7 +724,7 @@ test "state goto top/bottom" {
     std.mem.copy(u8, data, lit);
 
     var terminal = Terminal{ .size = .{ .width = 10, .height = 5 } };
-    var state = State.init(&terminal, Buffer.fromSlice(gpa, data));
+    var state = State.init(gpa, &terminal, Buffer.fromSlice(gpa, data));
     defer state.deinit();
     try state.buffer.calculateLines();
 
@@ -715,7 +755,7 @@ test "state goto start/end of line" {
     std.mem.copy(u8, data, lit);
 
     var terminal = Terminal{ .size = .{ .width = 100, .height = 2 } };
-    var state = State.init(&terminal, Buffer.fromSlice(gpa, data));
+    var state = State.init(gpa, &terminal, Buffer.fromSlice(gpa, data));
     defer state.deinit();
     try state.buffer.calculateLines();
 
@@ -749,7 +789,7 @@ test "state clamp line end" {
     std.mem.copy(u8, data, lit);
 
     var terminal = Terminal{ .size = .{ .width = 100, .height = 3 } };
-    var state = State.init(&terminal, Buffer.fromSlice(gpa, data));
+    var state = State.init(gpa, &terminal, Buffer.fromSlice(gpa, data));
     defer state.deinit();
     try state.buffer.calculateLines();
 
@@ -788,7 +828,7 @@ test "state page up/down" {
     std.mem.copy(u8, data, lit);
 
     var terminal = Terminal{ .size = .{ .width = 10, .height = 5 } };
-    var state = State.init(&terminal, Buffer.fromSlice(gpa, data));
+    var state = State.init(gpa, &terminal, Buffer.fromSlice(gpa, data));
     defer state.deinit();
     try state.buffer.calculateLines();
 
@@ -832,7 +872,7 @@ test "state viewport up/down" {
     std.mem.copy(u8, data, lit);
 
     var terminal = Terminal{ .size = .{ .width = 100, .height = 5 } };
-    var state = State.init(&terminal, Buffer.fromSlice(gpa, data));
+    var state = State.init(gpa, &terminal, Buffer.fromSlice(gpa, data));
     defer state.deinit();
     try state.buffer.calculateLines();
 
@@ -885,7 +925,7 @@ test "state viewport line to top/bottom/centre" {
     std.mem.copy(u8, data, lit);
 
     var terminal = Terminal{ .size = .{ .width = 100, .height = 5 } };
-    var state = State.init(&terminal, Buffer.fromSlice(gpa, data));
+    var state = State.init(gpa, &terminal, Buffer.fromSlice(gpa, data));
     defer state.deinit();
     try state.buffer.calculateLines();
 
@@ -942,7 +982,7 @@ test "state can't scroll past last line" {
     std.mem.copy(u8, data, lit);
 
     var terminal = Terminal{ .size = .{ .width = 10, .height = 5 } };
-    var state = State.init(&terminal, Buffer.fromSlice(gpa, data));
+    var state = State.init(gpa, &terminal, Buffer.fromSlice(gpa, data));
     defer state.deinit();
     try state.buffer.calculateLines();
 
