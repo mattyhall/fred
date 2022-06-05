@@ -123,6 +123,7 @@ pub const Cursor = struct {
 pub const Instruction = union(enum) {
     movement: Movement,
     command: std.ArrayList(u8),
+    insertion: u8,
 };
 
 pub const Movement = union(enum) {
@@ -166,8 +167,37 @@ pub const State = struct {
         return sz;
     }
 
-    pub fn bufferCursorPos(self: *const State) Position {
+    fn bufferCursorPos(self: *const State) Position {
         return .{ .x = self.cursor.pos.x + self.offset.x, .y = self.cursor.pos.y + self.offset.y };
+    }
+
+    fn bufferIndex(self: *const State) usize {
+        const pos = self.bufferCursorPos();
+        var index: usize = pos.x;
+        var iter = self.buffer.lineIterator();
+        var i: usize = 0;
+        while (iter.next()) |line| {
+            if (i >= pos.y) break;
+            i += 1;
+            index += line.len + 1;
+        }
+        return index;
+    }
+
+    fn putCursorAtIndex(self: *State, index: usize) void {
+        var i: usize = 0;
+        var x: u32 = 0;
+        var y: u32 = 0;
+        while (i < index) : (i += 1) {
+            if (self.buffer.data.items[i] == '\n') {
+                x = 0;
+                y += 1;
+                continue;
+            }
+
+            x += 1;
+        }
+        self.cursor.pos = .{ .x = x, .y = y };
     }
 
     fn handleInput(self: *State, ch: u8) !void {
@@ -176,6 +206,29 @@ pub const State = struct {
             .movement => |m| self.move(m),
             .command => |al| {
                 if (std.mem.eql(u8, "q", al.items)) std.os.exit(0);
+                al.deinit();
+            },
+            .insertion => |c| {
+                const index = self.bufferIndex();
+                switch (c) {
+                    127 => { // BACKSPACE
+                        if (index == 0) return;
+                        _ = self.buffer.data.orderedRemove(index - 1);
+                        try self.buffer.calculateLines();
+                        self.putCursorAtIndex(index - 1);
+                    },
+                    13 => { // RET
+                        try self.buffer.data.insert(self.buffer.gpa, index, '\n');
+                        try self.buffer.calculateLines();
+                        self.move(.down);
+                        self.move(.goto_line_start);
+                    },
+                    else => {
+                        try self.buffer.data.insert(self.buffer.gpa, index, c);
+                        try self.buffer.calculateLines();
+                        self.move(.right);
+                    },
+                }
             },
         }
     }
@@ -393,8 +446,13 @@ pub const State = struct {
             });
         }
 
-        // Block cursor
-        _ = try writer.write("\x1b[2 q");
+        if (self.input_handler.mode == .insert) {
+            // Bar cursor
+            _ = try writer.write("\x1b[6 q");
+        } else {
+            // Block cursor
+            _ = try writer.write("\x1b[2 q");
+        }
     }
 
     pub fn deinit(self: *State) void {
@@ -451,6 +509,10 @@ pub const InputHandler = struct {
                         },
                         ':' => {
                             self.mode = .command;
+                            return null;
+                        },
+                        'i' => {
+                            self.mode = .insert;
                             return null;
                         },
                         else => return null,
@@ -515,7 +577,13 @@ pub const InputHandler = struct {
                         return null;
                     },
                 },
-                else => return null,
+                .insert => switch (c) {
+                    27 => {
+                        self.mode = .{ .normal = .none };
+                        return null;
+                    },
+                    else => return Instruction{ .insertion = c },
+                },
             },
         };
     }
