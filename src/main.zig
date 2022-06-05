@@ -121,7 +121,7 @@ pub const Cursor = struct {
 };
 
 pub const Instruction = union(enum) {
-    movement: Movement,
+    movement: struct { movement: Movement, opts: MovementOpts = .{} },
     command: std.ArrayList(u8),
     insertion: u8,
 };
@@ -144,6 +144,10 @@ pub const Movement = union(enum) {
     goto_file_end,
     goto_line_start,
     goto_line_end,
+};
+
+pub const MovementOpts = struct {
+    allow_past_last_column: bool = false,
 };
 
 pub const State = struct {
@@ -203,7 +207,7 @@ pub const State = struct {
     fn handleInput(self: *State, ch: u8) !void {
         const input = (try self.input_handler.handleInput(ch)) orelse return;
         switch (input) {
-            .movement => |m| self.move(m),
+            .movement => |m| self.move(m.movement, m.opts),
             .command => |al| {
                 if (std.mem.eql(u8, "q", al.items)) std.os.exit(0);
                 al.deinit();
@@ -220,20 +224,20 @@ pub const State = struct {
                     13 => { // RET
                         try self.buffer.data.insert(self.buffer.gpa, index, '\n');
                         try self.buffer.calculateLines();
-                        self.move(.down);
-                        self.move(.goto_line_start);
+                        self.move(.down, .{});
+                        self.move(.goto_line_start, .{});
                     },
                     else => {
                         try self.buffer.data.insert(self.buffer.gpa, index, c);
                         try self.buffer.calculateLines();
-                        self.move(.right);
+                        self.move(.right, .{ .allow_past_last_column = true });
                     },
                 }
             },
         }
     }
 
-    fn move(self: *State, movement: Movement) void {
+    fn move(self: *State, movement: Movement, opts: MovementOpts) void {
         const pos = self.bufferCursorPos();
         switch (movement) {
             .up => {
@@ -259,10 +263,13 @@ pub const State = struct {
                 )) - 1;
             },
             .left => self.cursor.pos.x = std.math.max(1, self.cursor.pos.x) - 1,
-            .right => self.cursor.pos.x = std.math.min(
-                self.cursor.pos.x + 1,
-                std.math.max(1, self.buffer.lineSpan(pos.y).width()) - 1,
-            ),
+            .right => {
+                const minus: u32 = if (opts.allow_past_last_column) 0 else 1;
+                self.cursor.pos.x = std.math.min(
+                    self.cursor.pos.x + 1,
+                    std.math.max(1, self.buffer.lineSpan(pos.y).width()) - minus,
+                );
+            },
             .word_right => {
                 var line = self.buffer.lineAt(pos.y);
                 const want_non_alpha = std.ascii.isAlNum(line[pos.x]);
@@ -272,12 +279,12 @@ pub const State = struct {
                     if (new_pos.x >= line.len - 1) {
                         if (new_pos.y >= self.buffer.lines.items.len - 1) break;
 
-                        self.move(.down);
-                        self.move(.goto_line_start);
+                        self.move(.down, .{});
+                        self.move(.goto_line_start, .{});
                         break;
                     }
 
-                    self.move(.right);
+                    self.move(.right, .{});
                     new_pos = self.bufferCursorPos();
                     const char = line[new_pos.x];
 
@@ -300,8 +307,8 @@ pub const State = struct {
                 if (line_start) {
                     if (pos.y == 0) return;
 
-                    self.move(.up);
-                    self.move(.goto_line_end);
+                    self.move(.up, .{});
+                    self.move(.goto_line_end, .{});
                 }
 
                 var new_pos = self.bufferCursorPos();
@@ -310,7 +317,7 @@ pub const State = struct {
                 if (word_start) {
                     // Find first character of the previous word
                     while (true) {
-                        self.move(.left);
+                        self.move(.left, .{});
 
                         new_pos = self.bufferCursorPos();
                         if (new_pos.x == 0) return;
@@ -334,10 +341,10 @@ pub const State = struct {
                     if (!std.ascii.isAlNum(starting_char) and (std.ascii.isAlNum(char) or std.ascii.isSpace(char)))
                         break;
 
-                    self.move(.left);
+                    self.move(.left, .{});
                 }
 
-                self.move(.right);
+                self.move(.right, .{});
             },
             .goto_file_top => {
                 self.cursor.pos = .{ .x = 0, .y = 0 };
@@ -484,105 +491,114 @@ pub const InputHandler = struct {
 
     pub fn handleInput(self: *InputHandler, c: u8) !?Instruction {
         return Instruction{
-            .movement = switch (self.mode) {
-                .normal => |state| switch (state) {
-                    .none => switch (c) {
-                        'j' => Movement.down,
-                        'k' => Movement.up,
-                        'l' => Movement.right,
-                        'h' => Movement.left,
-                        'w' => Movement.word_right,
-                        'b' => Movement.word_left,
-                        2 => Movement.page_up,
-                        6 => Movement.page_down,
-                        'g' => {
-                            self.mode = .{ .normal = .goto };
-                            return null;
+            .movement = .{
+                .movement = switch (self.mode) {
+                    .normal => |state| switch (state) {
+                        .none => switch (c) {
+                            'j' => Movement.down,
+                            'k' => Movement.up,
+                            'l' => Movement.right,
+                            'h' => Movement.left,
+                            'w' => Movement.word_right,
+                            'b' => Movement.word_left,
+                            2 => Movement.page_up,
+                            6 => Movement.page_down,
+                            'g' => {
+                                self.mode = .{ .normal = .goto };
+                                return null;
+                            },
+                            'v' => {
+                                self.mode = .{ .normal = .viewport };
+                                return null;
+                            },
+                            'V' => {
+                                self.mode = .{ .normal = .viewport_sticky };
+                                return null;
+                            },
+                            ':' => {
+                                self.mode = .command;
+                                return null;
+                            },
+                            'i' => {
+                                self.mode = .insert;
+                                return null;
+                            },
+                            'a' => {
+                                self.mode = .insert;
+                                return Instruction{ .movement = .{
+                                    .movement = Movement.right,
+                                    .opts = .{ .allow_past_last_column = true },
+                                } };
+                            },
+                            else => return null,
                         },
-                        'v' => {
-                            self.mode = .{ .normal = .viewport };
-                            return null;
-                        },
-                        'V' => {
-                            self.mode = .{ .normal = .viewport_sticky };
-                            return null;
-                        },
-                        ':' => {
-                            self.mode = .command;
-                            return null;
-                        },
-                        'i' => {
-                            self.mode = .insert;
-                            return null;
-                        },
-                        else => return null,
-                    },
-                    .goto => switch (c) {
-                        'e' => blk: {
-                            self.mode = .{ .normal = .none };
-                            break :blk Movement.goto_file_end;
-                        },
-                        'g' => blk: {
-                            self.mode = .{ .normal = .none };
-                            break :blk Movement.goto_file_top;
-                        },
-                        'h' => blk: {
-                            self.mode = .{ .normal = .none };
-                            break :blk Movement.goto_line_start;
-                        },
-                        'l' => blk: {
-                            self.mode = .{ .normal = .none };
-                            break :blk Movement.goto_line_end;
-                        },
-                        else => {
-                            self.mode = .{ .normal = .none };
-                            return null;
-                        },
-                    },
-                    .viewport, .viewport_sticky => b: {
-                        const movement = switch (c) {
-                            'j' => Movement.viewport_down,
-                            'k' => Movement.viewport_up,
-                            't' => Movement.viewport_line_top,
-                            'c' => Movement.viewport_centre,
-                            'b' => Movement.viewport_line_bottom,
+                        .goto => switch (c) {
+                            'e' => blk: {
+                                self.mode = .{ .normal = .none };
+                                break :blk Movement.goto_file_end;
+                            },
+                            'g' => blk: {
+                                self.mode = .{ .normal = .none };
+                                break :blk Movement.goto_file_top;
+                            },
+                            'h' => blk: {
+                                self.mode = .{ .normal = .none };
+                                break :blk Movement.goto_line_start;
+                            },
+                            'l' => blk: {
+                                self.mode = .{ .normal = .none };
+                                break :blk Movement.goto_line_end;
+                            },
                             else => {
                                 self.mode = .{ .normal = .none };
                                 return null;
                             },
-                        };
-                        if (state == .viewport) {
+                        },
+                        .viewport, .viewport_sticky => b: {
+                            const movement = switch (c) {
+                                'j' => Movement.viewport_down,
+                                'k' => Movement.viewport_up,
+                                't' => Movement.viewport_line_top,
+                                'c' => Movement.viewport_centre,
+                                'b' => Movement.viewport_line_bottom,
+                                else => {
+                                    self.mode = .{ .normal = .none };
+                                    return null;
+                                },
+                            };
+                            if (state == .viewport) {
+                                self.mode = .{ .normal = .none };
+                            }
+                            break :b movement;
+                        },
+                    },
+                    .command => switch (c) {
+                        13 => {
+                            // RET
+                            const al = self.cmd.toManaged(self.gpa);
+                            self.cmd = .{};
                             self.mode = .{ .normal = .none };
-                        }
-                        break :b movement;
+                            return Instruction{ .command = al };
+                        },
+                        27 => {
+                            // ESC
+                            self.mode = .{ .normal = .none };
+                            self.cmd.clearRetainingCapacity();
+                            return null;
+                        },
+                        else => {
+                            if (c < 32 or c > 126) return null;
+                            try self.cmd.append(self.gpa, c);
+                            return null;
+                        },
                     },
-                },
-                .command => switch (c) {
-                    13 => {
-                        // RET
-                        const al = self.cmd.toManaged(self.gpa);
-                        self.cmd = .{};
-                        self.mode = .{ .normal = .none };
-                        return Instruction{ .command = al };
+                    .insert => switch (c) {
+                        27 => {
+                            self.mode = .{ .normal = .none };
+                            return null;
+                        },
+                        else => return Instruction{ .insertion = c },
                     },
-                    27 => {
-                        // ESC
-                        self.mode = .{ .normal = .none };
-                        self.cmd.clearRetainingCapacity();
-                        return null;
-                    },
-                    else => {
-                        if (c < 32 or c > 126) return null;
-                        try self.cmd.append(self.gpa, c);
-                        return null;
-                    },
-                },
-                .insert => switch (c) {
-                    27 => {
-                        self.mode = .{ .normal = .none };
-                        return null;
-                    },
-                    else => return Instruction{ .insertion = c },
                 },
             },
         };
@@ -682,32 +698,32 @@ test "state basic cursor movement" {
     state.have_command_line = false;
     try state.buffer.calculateLines();
 
-    state.move(.left);
+    state.move(.left, .{});
     try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.cursor.pos);
 
-    state.move(.up);
+    state.move(.up, .{});
     try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.cursor.pos);
 
-    state.move(.right);
+    state.move(.right, .{});
     try std.testing.expectEqual(Position{ .x = 1, .y = 0 }, state.cursor.pos);
 
-    state.move(.down);
+    state.move(.down, .{});
     try std.testing.expectEqual(Position{ .x = 1, .y = 1 }, state.cursor.pos);
 
-    state.move(.down);
-    state.move(.down);
-    state.move(.down);
-    state.move(.right);
-    state.move(.right);
-    state.move(.right);
+    state.move(.down, .{});
+    state.move(.down, .{});
+    state.move(.down, .{});
+    state.move(.right, .{});
+    state.move(.right, .{});
+    state.move(.right, .{});
     try std.testing.expectEqual(Position{ .x = 4, .y = 4 }, state.cursor.pos);
 
-    state.move(.up);
-    state.move(.up);
-    state.move(.up);
-    state.move(.left);
-    state.move(.left);
-    state.move(.left);
+    state.move(.up, .{});
+    state.move(.up, .{});
+    state.move(.up, .{});
+    state.move(.left, .{});
+    state.move(.left, .{});
+    state.move(.left, .{});
     try std.testing.expectEqual(Position{ .x = 1, .y = 1 }, state.cursor.pos);
 }
 
@@ -739,12 +755,12 @@ test "state word movement" {
 
     var i: isize = 0;
     while (i < positions.len) : (i += 1) {
-        state.move(.word_right);
+        state.move(.word_right, .{});
         try std.testing.expectEqual(positions[@intCast(usize, i)], state.cursor.pos);
     }
     i -= 2;
     while (i >= 0) : (i -= 1) {
-        state.move(.word_left);
+        state.move(.word_left, .{});
         try std.testing.expectEqual(positions[@intCast(usize, i)], state.cursor.pos);
     }
 }
@@ -768,35 +784,35 @@ test "state viewport" {
     state.have_command_line = false;
     try state.buffer.calculateLines();
 
-    state.move(.down);
-    state.move(.down);
+    state.move(.down, .{});
+    state.move(.down, .{});
     // Top 'q', cursor on 'd'
     try std.testing.expectEqual(Position{ .x = 0, .y = 2 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.offset);
 
-    state.move(.down);
+    state.move(.down, .{});
     // Top 'u', cursor on 'l'
     try std.testing.expectEqual(Position{ .x = 0, .y = 2 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 1 }, state.offset);
 
-    state.move(.down);
-    state.move(.down);
+    state.move(.down, .{});
+    state.move(.down, .{});
     // Top 'l', cursor on '5'
     try std.testing.expectEqual(Position{ .x = 0, .y = 2 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 3 }, state.offset);
 
-    state.move(.down);
+    state.move(.down, .{});
     // Top still 'l', cursor on '5'
     try std.testing.expectEqual(Position{ .x = 0, .y = 2 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 3 }, state.offset);
 
-    state.move(.up);
-    state.move(.up);
+    state.move(.up, .{});
+    state.move(.up, .{});
     // Top still 'l', cursor on 'l'
     try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 3 }, state.offset);
 
-    state.move(.up);
+    state.move(.up, .{});
     // Top 'd', cursor on 'd'
     try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 2 }, state.offset);
@@ -825,17 +841,17 @@ test "state goto top/bottom" {
     state.have_command_line = false;
     try state.buffer.calculateLines();
 
-    state.move(.goto_file_end);
+    state.move(.goto_file_end, .{});
     // Top '6', cursor on '10'
     try std.testing.expectEqual(Position{ .x = 0, .y = 4 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 5 }, state.offset);
 
-    state.move(.goto_file_top);
+    state.move(.goto_file_top, .{});
     try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.offset);
 
     terminal.size.height = 15;
-    state.move(.goto_file_end);
+    state.move(.goto_file_end, .{});
     // Top '1', cursor on '10'
     try std.testing.expectEqual(Position{ .x = 0, .y = 9 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.offset);
@@ -857,21 +873,21 @@ test "state goto start/end of line" {
     state.have_command_line = false;
     try state.buffer.calculateLines();
 
-    state.move(.goto_line_end);
+    state.move(.goto_line_end, .{});
     try std.testing.expectEqual(Position{ .x = 4, .y = 0 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.offset);
 
-    state.move(.down);
-    state.move(.goto_line_start);
+    state.move(.down, .{});
+    state.move(.goto_line_start, .{});
     try std.testing.expectEqual(Position{ .x = 0, .y = 1 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.offset);
 
-    state.move(.goto_line_end);
+    state.move(.goto_line_end, .{});
     try std.testing.expectEqual(Position{ .x = 4, .y = 1 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.offset);
 
-    state.move(.down);
-    state.move(.goto_line_end);
+    state.move(.down, .{});
+    state.move(.goto_line_end, .{});
     try std.testing.expectEqual(Position{ .x = 23, .y = 1 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 1 }, state.offset);
 }
@@ -892,19 +908,19 @@ test "state clamp line end" {
     state.have_command_line = false;
     try state.buffer.calculateLines();
 
-    state.move(.goto_line_end);
+    state.move(.goto_line_end, .{});
     try std.testing.expectEqual(Position{ .x = 23, .y = 0 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.offset);
 
-    state.move(.right);
+    state.move(.right, .{});
     try std.testing.expectEqual(Position{ .x = 23, .y = 0 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.offset);
 
-    state.move(.down);
+    state.move(.down, .{});
     try std.testing.expectEqual(Position{ .x = 4, .y = 1 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.offset);
 
-    state.move(.down);
+    state.move(.down, .{});
     try std.testing.expectEqual(Position{ .x = 1, .y = 2 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.offset);
 }
@@ -932,23 +948,23 @@ test "state page up/down" {
     state.have_command_line = false;
     try state.buffer.calculateLines();
 
-    state.move(.down);
-    state.move(.page_up);
+    state.move(.down, .{});
+    state.move(.page_up, .{});
     // Top '1', cursor on '2'
     try std.testing.expectEqual(Position{ .x = 0, .y = 1 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.offset);
 
-    state.move(.page_down);
+    state.move(.page_down, .{});
     // Top '5', cursor on '5'
     try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 4 }, state.offset);
 
-    state.move(.page_down);
+    state.move(.page_down, .{});
     // Top '9', cursor on '9'
     try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 8 }, state.offset);
 
-    state.move(.page_up);
+    state.move(.page_up, .{});
     // Top '5', cursor on '10'
     try std.testing.expectEqual(Position{ .x = 0, .y = 4 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 4 }, state.offset);
@@ -977,32 +993,32 @@ test "state viewport up/down" {
     state.have_command_line = false;
     try state.buffer.calculateLines();
 
-    state.move(.viewport_up);
+    state.move(.viewport_up, .{});
     try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.offset);
 
-    state.move(.down);
-    state.move(.down);
+    state.move(.down, .{});
+    state.move(.down, .{});
     // Top '1', cursor '3'
     try std.testing.expectEqual(Position{ .x = 0, .y = 2 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.offset);
 
-    state.move(.viewport_down);
-    state.move(.viewport_down);
+    state.move(.viewport_down, .{});
+    state.move(.viewport_down, .{});
     // Top '3', cursor '3'
     try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 2 }, state.offset);
 
-    state.move(.viewport_down);
-    state.move(.viewport_down);
-    state.move(.viewport_down);
-    state.move(.viewport_down);
+    state.move(.viewport_down, .{});
+    state.move(.viewport_down, .{});
+    state.move(.viewport_down, .{});
+    state.move(.viewport_down, .{});
     // Top '7', cursor '7'
     try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 6 }, state.offset);
 
-    state.move(.viewport_up);
-    state.move(.viewport_up);
+    state.move(.viewport_up, .{});
+    state.move(.viewport_up, .{});
     // Top '5', cursor '7'
     try std.testing.expectEqual(Position{ .x = 0, .y = 2 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 4 }, state.offset);
@@ -1031,35 +1047,35 @@ test "state viewport line to top/bottom/centre" {
     state.have_command_line = false;
     try state.buffer.calculateLines();
 
-    state.move(.viewport_line_top);
+    state.move(.viewport_line_top, .{});
     try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.offset);
 
-    state.move(.down);
-    state.move(.down);
+    state.move(.down, .{});
+    state.move(.down, .{});
     // Top '1', cursor '3'
     try std.testing.expectEqual(Position{ .x = 0, .y = 2 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.offset);
 
-    state.move(.viewport_line_top);
+    state.move(.viewport_line_top, .{});
     // Top '3', cursor '3'
     try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 2 }, state.offset);
 
-    state.move(.viewport_line_bottom);
+    state.move(.viewport_line_bottom, .{});
     // Top '1', cursor '3'
     try std.testing.expectEqual(Position{ .x = 0, .y = 2 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.offset);
 
-    state.move(.viewport_centre);
+    state.move(.viewport_centre, .{});
     // Top '1', cursor '3'
     try std.testing.expectEqual(Position{ .x = 0, .y = 2 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.offset);
 
-    state.move(.down);
-    state.move(.down);
+    state.move(.down, .{});
+    state.move(.down, .{});
     // Top '1', cursor '5'
-    state.move(.viewport_centre);
+    state.move(.viewport_centre, .{});
     // Top '3', cursor '5'
     try std.testing.expectEqual(Position{ .x = 0, .y = 2 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 2 }, state.offset);
@@ -1089,13 +1105,13 @@ test "state can't scroll past last line" {
     state.have_command_line = false;
     try state.buffer.calculateLines();
 
-    state.move(.goto_file_end);
+    state.move(.goto_file_end, .{});
     // Top '6', cursor on '10'
     try std.testing.expectEqual(Position{ .x = 0, .y = 4 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 5 }, state.offset);
 
     terminal.size.height = 15;
-    state.move(.down);
+    state.move(.down, .{});
     // Top '6', cursor on '10'
     try std.testing.expectEqual(Position{ .x = 0, .y = 4 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 5 }, state.offset);
