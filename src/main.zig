@@ -70,7 +70,7 @@ pub const Buffer = struct {
             try (try std.fs.openDirAbsolute(
                 std.fs.path.dirname(path) orelse return error.file_not_found,
                 .{},
-            )).openFile(std.fs.path.basename(path), .{ .mode = .read_write, })
+            )).openFile(std.fs.path.basename(path), .{ .mode = .read_write })
         else
             try std.fs.cwd().openFile(path, .{ .mode = .read_write });
         return f;
@@ -161,6 +161,7 @@ pub const Movement = union(enum) {
     viewport_centre,
     viewport_line_top,
     viewport_line_bottom,
+    goto_line,
     goto_file_top,
     goto_file_end,
     goto_line_start,
@@ -169,6 +170,7 @@ pub const Movement = union(enum) {
 
 pub const MovementOpts = struct {
     allow_past_last_column: bool = false,
+    repeat: u32 = 1,
 };
 
 pub const State = struct {
@@ -377,6 +379,18 @@ pub const State = struct {
                 if (self.buffer.lines.items.len > self.size().height)
                     self.offset = .{ .x = 0, .y = @intCast(u32, self.buffer.lines.items.len) - self.size().height };
             },
+            .goto_line => {
+                if (opts.repeat == 0 or opts.repeat > self.buffer.lines.items.len) return;
+                const line = opts.repeat - 1;
+                if (line < self.size().height) {
+                    self.cursor.pos = .{ .x = 0, .y = line };
+                    self.offset = .{ .x = 0, .y = 0 };
+                    return;
+                }
+
+                self.cursor.pos = .{ .x = 0, .y = self.size().height / 2 };
+                self.offset = .{ .x = 0, .y = line - self.size().height / 2 };
+            },
             .goto_line_start => self.cursor.pos.x = 0,
             .goto_line_end => self.cursor.pos.x = self.buffer.lineSpan(pos.y).width() - 1,
             .page_up => {
@@ -502,9 +516,10 @@ pub const InputHandler = struct {
     gpa: std.mem.Allocator,
     mode: Mode = .{ .normal = .none },
     cmd: std.ArrayListUnmanaged(u8),
+    repeat: std.ArrayListUnmanaged(u8),
 
     pub fn init(allocator: std.mem.Allocator) InputHandler {
-        return .{ .gpa = allocator, .cmd = std.ArrayListUnmanaged(u8){} };
+        return .{ .gpa = allocator, .cmd = std.ArrayListUnmanaged(u8){}, .repeat = std.ArrayListUnmanaged(u8){} };
     }
 
     pub fn deinit(self: *InputHandler) void {
@@ -512,6 +527,11 @@ pub const InputHandler = struct {
     }
 
     pub fn handleInput(self: *InputHandler, c: u8) !?Instruction {
+        var inhibit_clear_repeat = false;
+        defer b: {
+            if (inhibit_clear_repeat) break :b;
+            self.repeat.clearRetainingCapacity();
+        }
         return Instruction{
             .movement = .{
                 .movement = switch (self.mode) {
@@ -525,7 +545,9 @@ pub const InputHandler = struct {
                             'b' => Movement.word_left,
                             2 => Movement.page_up,
                             6 => Movement.page_down,
-                            'g' => {
+                            'g' => b: {
+                                if (self.repeat.items.len != 0) break :b Movement.goto_line;
+
                                 self.mode = .{ .normal = .goto };
                                 return null;
                             },
@@ -551,6 +573,11 @@ pub const InputHandler = struct {
                                     .movement = Movement.right,
                                     .opts = .{ .allow_past_last_column = true },
                                 } };
+                            },
+                            '1', '2', '3', '4', '5', '6', '7', '8', '9', '0' => {
+                                inhibit_clear_repeat = true;
+                                try self.repeat.append(self.gpa, c);
+                                return null;
                             },
                             else => return null,
                         },
@@ -621,6 +648,9 @@ pub const InputHandler = struct {
                         },
                         else => return Instruction{ .insertion = c },
                     },
+                },
+                .opts = .{
+                    .repeat = if (self.repeat.items.len == 0) 1 else try std.fmt.parseInt(u32, self.repeat.items, 10),
                 },
             },
         };
@@ -912,6 +942,35 @@ test "state goto start/end of line" {
     state.move(.goto_line_end, .{});
     try std.testing.expectEqual(Position{ .x = 23, .y = 1 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 1 }, state.offset);
+}
+
+test "state goto line" {
+    // Can happen if you are on the last line and make the window bigger - there will be blank space at the bottom
+    var gpa = std.testing.allocator;
+    const lit =
+        \\1
+        \\2
+        \\3
+        \\4
+        \\5
+        \\6
+        \\7
+        \\8
+        \\9
+        \\10
+    ;
+    var data = try gpa.alloc(u8, lit.len);
+    std.mem.copy(u8, data, lit);
+
+    var terminal = Terminal{ .size = .{ .width = 10, .height = 5 } };
+    var state = State.init(gpa, &terminal, Buffer.fromSlice(gpa, data));
+    defer state.deinit();
+    state.have_command_line = false;
+    try state.buffer.calculateLines();
+
+    state.move(.goto_line, .{ .repeat = 5 });
+    try std.testing.expectEqual(Position{ .x = 0, .y = 4 }, state.cursor.pos);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.offset);
 }
 
 test "state clamp line end" {
