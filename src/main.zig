@@ -45,6 +45,7 @@ pub const Buffer = struct {
     gpa: std.mem.Allocator,
     data: std.ArrayListUnmanaged(u8),
     lines: std.ArrayListUnmanaged(u32),
+    path: ?[]const u8 = null,
 
     const Self = @This();
 
@@ -64,12 +65,25 @@ pub const Buffer = struct {
         }
     };
 
+    fn openFile(path: []const u8) !std.fs.File {
+        const f = if (path[0] == '/')
+            try (try std.fs.openDirAbsolute(
+                std.fs.path.dirname(path) orelse return error.file_not_found,
+                .{},
+            )).openFile(std.fs.path.basename(path), .{ .mode = .read_write, })
+        else
+            try std.fs.cwd().openFile(path, .{ .mode = .read_write });
+        return f;
+    }
+
     pub fn fromFile(allocator: std.mem.Allocator, path: []const u8) !Self {
-        var f = try std.fs.cwd().openFile(path, .{});
+        var f = try openFile(path);
         defer f.close();
 
         var data = try f.readToEndAlloc(allocator, 2 * 1024 * 1024);
-        return fromSlice(allocator, data);
+        var self = fromSlice(allocator, data);
+        self.path = path;
+        return self;
     }
 
     pub fn fromSlice(allocator: std.mem.Allocator, data: []u8) Self {
@@ -78,6 +92,13 @@ pub const Buffer = struct {
             .data = std.ArrayListUnmanaged(u8){ .items = data, .capacity = data.len },
             .lines = std.ArrayListUnmanaged(u32){},
         };
+    }
+
+    pub fn save(self: *const Self) !void {
+        const p = self.path orelse return error.no_path;
+        var f = try openFile(p);
+        defer f.close();
+        try f.writeAll(self.data.items);
     }
 
     pub fn calculateLines(self: *Self) !void {
@@ -210,6 +231,7 @@ pub const State = struct {
             .movement => |m| self.move(m.movement, m.opts),
             .command => |al| {
                 if (std.mem.eql(u8, "q", al.items)) std.os.exit(0);
+                if (std.mem.eql(u8, "w", al.items)) try self.buffer.save();
                 al.deinit();
             },
             .insertion => |c| {
