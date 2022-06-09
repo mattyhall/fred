@@ -166,6 +166,7 @@ pub const Movement = union(enum) {
     goto_file_end,
     goto_line_start,
     goto_line_end,
+    goto_line_end_plus_one,
 };
 
 pub const MovementOpts = struct {
@@ -393,6 +394,10 @@ pub const State = struct {
             },
             .goto_line_start => self.cursor.pos.x = 0,
             .goto_line_end => self.cursor.pos.x = self.buffer.lineSpan(pos.y).width() - 1,
+            .goto_line_end_plus_one => {
+                self.move(.goto_line_end, .{});
+                self.move(.right, .{ .allow_past_last_column = true });
+            },
             .page_up => {
                 self.offset.y = std.math.max(self.offset.y, self.size().height - 1) - (self.size().height - 1);
                 if (pos.y >= self.size().height)
@@ -567,10 +572,14 @@ pub const InputHandler = struct {
                                 self.mode = .insert;
                                 return null;
                             },
-                            'a' => {
+                            'a', 'A' => {
                                 self.mode = .insert;
                                 return Instruction{ .movement = .{
-                                    .movement = Movement.right,
+                                    .movement = switch (c) {
+                                        'a' => Movement.right,
+                                        'A' => Movement.goto_line_end_plus_one,
+                                        else => unreachable,
+                                    },
                                     .opts = .{ .allow_past_last_column = true },
                                 } };
                             },
