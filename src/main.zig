@@ -583,6 +583,19 @@ pub const InputHandler = struct {
                                     .opts = .{ .allow_past_last_column = true },
                                 } }};
                             },
+                            'o' => {
+                                self.mode = .insert;
+                                var instructions: [2]Instruction = [2]Instruction{
+                                    Instruction{
+                                        .movement = .{
+                                            .movement = Movement.goto_line_end_plus_one,
+                                            .opts = .{ .allow_past_last_column = true },
+                                        },
+                                    },
+                                    Instruction{ .insertion = 13 },
+                                };
+                                return &instructions;
+                            },
                             '1', '2', '3', '4', '5', '6', '7', '8', '9', '0' => {
                                 inhibit_clear_repeat = true;
                                 try self.repeat.append(self.gpa, c);
