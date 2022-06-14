@@ -142,6 +142,7 @@ pub const Cursor = struct {
 };
 
 pub const Instruction = union(enum) {
+    noop: void,
     movement: struct { movement: Movement, opts: MovementOpts = .{} },
     command: std.ArrayList(u8),
     insertion: u8,
@@ -230,36 +231,39 @@ pub const State = struct {
 
     fn handleInput(self: *State, ch: u8) !void {
         const input = (try self.input_handler.handleInput(ch)) orelse return;
-        for (input) |i| switch (i) {
-            .movement => |m| self.move(m.movement, m.opts),
-            .command => |al| {
-                if (std.mem.eql(u8, "q", al.items)) std.os.exit(0);
-                if (std.mem.eql(u8, "w", al.items)) try self.buffer.save();
-                al.deinit();
-            },
-            .insertion => |c| {
-                const index = self.bufferIndex();
-                switch (c) {
-                    127 => { // BACKSPACE
-                        if (index == 0) return;
-                        _ = self.buffer.data.orderedRemove(index - 1);
-                        try self.buffer.calculateLines();
-                        self.putCursorAtIndex(index - 1);
-                    },
-                    13 => { // RET
-                        try self.buffer.data.insert(self.buffer.gpa, index, '\n');
-                        try self.buffer.calculateLines();
-                        self.move(.down, .{});
-                        self.move(.goto_line_start, .{});
-                    },
-                    else => {
-                        try self.buffer.data.insert(self.buffer.gpa, index, c);
-                        try self.buffer.calculateLines();
-                        self.move(.right, .{ .allow_past_last_column = true });
-                    },
-                }
-            },
-        };
+        for (input) |i| {
+            switch (i) {
+                .movement => |m| self.move(m.movement, m.opts),
+                .command => |al| {
+                    if (std.mem.eql(u8, "q", al.items)) std.os.exit(0);
+                    if (std.mem.eql(u8, "w", al.items)) try self.buffer.save();
+                    al.deinit();
+                },
+                .insertion => |c| {
+                    const index = self.bufferIndex();
+                    switch (c) {
+                        127 => { // BACKSPACE
+                            if (index == 0) return;
+                            _ = self.buffer.data.orderedRemove(index - 1);
+                            try self.buffer.calculateLines();
+                            self.putCursorAtIndex(index - 1);
+                        },
+                        13 => { // RET
+                            try self.buffer.data.insert(self.buffer.gpa, index, '\n');
+                            try self.buffer.calculateLines();
+                            self.move(.down, .{});
+                            self.move(.goto_line_start, .{});
+                        },
+                        else => {
+                            try self.buffer.data.insert(self.buffer.gpa, index, c);
+                            try self.buffer.calculateLines();
+                            self.move(.right, .{ .allow_past_last_column = true });
+                        },
+                    }
+                },
+                .noop => {},
+            }
+        }
     }
 
     fn move(self: *State, movement: Movement, opts: MovementOpts) void {
@@ -531,13 +535,19 @@ pub const InputHandler = struct {
         self.cmd.deinit(self.gpa);
     }
 
-    pub fn handleInput(self: *InputHandler, c: u8) !?[]Instruction {
+    pub fn handleInput(self: *InputHandler, c: u8) !?[16]Instruction {
+        var instructions: [16]Instruction = .{
+            .noop, .noop, .noop, .noop,
+            .noop, .noop, .noop, .noop,
+            .noop, .noop, .noop, .noop,
+            .noop, .noop, .noop, .noop,
+        };
         var inhibit_clear_repeat = false;
         defer b: {
             if (inhibit_clear_repeat) break :b;
             self.repeat.clearRetainingCapacity();
         }
-        return &[1]Instruction{Instruction{
+        instructions[0] = Instruction{
             .movement = .{
                 .movement = switch (self.mode) {
                     .normal => |state| switch (state) {
@@ -554,54 +564,67 @@ pub const InputHandler = struct {
                                 if (self.repeat.items.len != 0) break :b Movement.goto_line;
 
                                 self.mode = .{ .normal = .goto };
-                                return null;
+                                return instructions;
                             },
                             'v' => {
                                 self.mode = .{ .normal = .viewport };
-                                return null;
+                                return instructions;
                             },
                             'V' => {
                                 self.mode = .{ .normal = .viewport_sticky };
-                                return null;
+                                return instructions;
                             },
                             ':' => {
                                 self.mode = .command;
-                                return null;
+                                return instructions;
                             },
                             'i' => {
                                 self.mode = .insert;
-                                return null;
+                                return instructions;
                             },
                             'a', 'A' => {
                                 self.mode = .insert;
-                                return &[1]Instruction{.{ .movement = .{
+                                instructions[0] = .{ .movement = .{
                                     .movement = switch (c) {
                                         'a' => Movement.right,
                                         'A' => Movement.goto_line_end_plus_one,
                                         else => unreachable,
                                     },
                                     .opts = .{ .allow_past_last_column = true },
-                                } }};
+                                } };
+                                return instructions;
                             },
                             'o' => {
                                 self.mode = .insert;
-                                var instructions: [2]Instruction = [2]Instruction{
-                                    Instruction{
-                                        .movement = .{
-                                            .movement = Movement.goto_line_end_plus_one,
-                                            .opts = .{ .allow_past_last_column = true },
-                                        },
+
+                                instructions[0] = Instruction{
+                                    .movement = .{
+                                        .movement = Movement.goto_line_end_plus_one,
+                                        .opts = .{ .allow_past_last_column = true },
                                     },
-                                    Instruction{ .insertion = 13 },
                                 };
-                                return &instructions;
+                                instructions[1] = Instruction{ .insertion = 13 };
+                                return instructions;
+                            },
+                            'O' => {
+                                self.mode = .insert;
+                                instructions[0] = .{
+                                    .movement = .{
+                                        .movement = Movement.goto_line_start,
+                                        .opts = .{ .allow_past_last_column = true },
+                                    },
+                                };
+                                instructions[1] = .{ .insertion = 13 };
+                                instructions[2] = .{ .movement = .{ .movement = Movement.up } };
+                                instructions[3] = .{ .movement = .{ .movement = Movement.goto_line_start } };
+                                return instructions;
                             },
                             '1', '2', '3', '4', '5', '6', '7', '8', '9', '0' => {
                                 inhibit_clear_repeat = true;
                                 try self.repeat.append(self.gpa, c);
-                                return null;
+                                return instructions;
                             },
-                            else => return null,
+                            else => return instructions,
                         },
                         .goto => switch (c) {
                             'e' => blk: {
@@ -622,7 +645,7 @@ pub const InputHandler = struct {
                             },
                             else => {
                                 self.mode = .{ .normal = .none };
-                                return null;
+                                return instructions;
                             },
                         },
                         .viewport, .viewport_sticky => b: {
@@ -634,7 +657,7 @@ pub const InputHandler = struct {
                                 'b' => Movement.viewport_line_bottom,
                                 else => {
                                     self.mode = .{ .normal = .none };
-                                    return null;
+                                    return instructions;
                                 },
                             };
                             if (state == .viewport) {
@@ -649,33 +672,41 @@ pub const InputHandler = struct {
                             const al = self.cmd.toManaged(self.gpa);
                             self.cmd = .{};
                             self.mode = .{ .normal = .none };
-                            return &[1]Instruction{.{ .command = al }};
+                            instructions[0] = .{ .command = al };
+                            return instructions;
                         },
                         27 => {
                             // ESC
                             self.mode = .{ .normal = .none };
                             self.cmd.clearRetainingCapacity();
-                            return null;
+                            return instructions;
                         },
                         else => {
-                            if (c < 32 or c > 126) return null;
+                            if (c < 32 or c > 126) return instructions;
                             try self.cmd.append(self.gpa, c);
-                            return null;
+                            return instructions;
                         },
                     },
                     .insert => switch (c) {
                         27 => {
+                            // ESC
                             self.mode = .{ .normal = .none };
-                            return null;
+                            // Not sure why we need to do this - possible miscomp?
+                            instructions[0] = .noop;
+                            return instructions;
                         },
-                        else => return &[1]Instruction{.{ .insertion = c }},
+                        else => {
+                            instructions[0] = .{ .insertion = c };
+                            return instructions;
+                        },
                     },
                 },
                 .opts = .{
                     .repeat = if (self.repeat.items.len == 0) 1 else try std.fmt.parseInt(u32, self.repeat.items, 10),
                 },
             },
-        }};
+        };
+        return instructions;
     }
 };
 
