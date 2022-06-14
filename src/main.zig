@@ -230,7 +230,7 @@ pub const State = struct {
 
     fn handleInput(self: *State, ch: u8) !void {
         const input = (try self.input_handler.handleInput(ch)) orelse return;
-        switch (input) {
+        for (input) |i| switch (i) {
             .movement => |m| self.move(m.movement, m.opts),
             .command => |al| {
                 if (std.mem.eql(u8, "q", al.items)) std.os.exit(0);
@@ -259,7 +259,7 @@ pub const State = struct {
                     },
                 }
             },
-        }
+        };
     }
 
     fn move(self: *State, movement: Movement, opts: MovementOpts) void {
@@ -531,13 +531,13 @@ pub const InputHandler = struct {
         self.cmd.deinit(self.gpa);
     }
 
-    pub fn handleInput(self: *InputHandler, c: u8) !?Instruction {
+    pub fn handleInput(self: *InputHandler, c: u8) !?[]Instruction {
         var inhibit_clear_repeat = false;
         defer b: {
             if (inhibit_clear_repeat) break :b;
             self.repeat.clearRetainingCapacity();
         }
-        return Instruction{
+        return &[1]Instruction{Instruction{
             .movement = .{
                 .movement = switch (self.mode) {
                     .normal => |state| switch (state) {
@@ -574,14 +574,14 @@ pub const InputHandler = struct {
                             },
                             'a', 'A' => {
                                 self.mode = .insert;
-                                return Instruction{ .movement = .{
+                                return &[1]Instruction{.{ .movement = .{
                                     .movement = switch (c) {
                                         'a' => Movement.right,
                                         'A' => Movement.goto_line_end_plus_one,
                                         else => unreachable,
                                     },
                                     .opts = .{ .allow_past_last_column = true },
-                                } };
+                                } }};
                             },
                             '1', '2', '3', '4', '5', '6', '7', '8', '9', '0' => {
                                 inhibit_clear_repeat = true;
@@ -636,7 +636,7 @@ pub const InputHandler = struct {
                             const al = self.cmd.toManaged(self.gpa);
                             self.cmd = .{};
                             self.mode = .{ .normal = .none };
-                            return Instruction{ .command = al };
+                            return &[1]Instruction{.{ .command = al }};
                         },
                         27 => {
                             // ESC
@@ -655,14 +655,14 @@ pub const InputHandler = struct {
                             self.mode = .{ .normal = .none };
                             return null;
                         },
-                        else => return Instruction{ .insertion = c },
+                        else => return &[1]Instruction{.{ .insertion = c }},
                     },
                 },
                 .opts = .{
                     .repeat = if (self.repeat.items.len == 0) 1 else try std.fmt.parseInt(u32, self.repeat.items, 10),
                 },
             },
-        };
+        }};
     }
 };
 
