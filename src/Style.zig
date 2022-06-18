@@ -7,6 +7,7 @@ italic: u1 = 0,
 const Self = @This();
 
 pub const grey = Colour{ .r = 68, .g = 71, .b = 90 };
+pub const pink = Colour{ .r = 255, .g = 121, .b = 198 };
 
 pub const Colour = struct {
     r: u8,
@@ -28,7 +29,7 @@ pub fn print(self: Self, writer: anytype, comptime format: []const u8, args: any
         try colour(writer, self.foreground);
     }
     if (!self.background.eql(Colour{ .r = 0, .g = 0, .b = 0 })) {
-        _ = try writer.write("\x1b[38;");
+        _ = try writer.write("\x1b[48;");
         try colour(writer, self.background);
     }
 

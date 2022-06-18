@@ -1,6 +1,7 @@
 const std = @import("std");
 const Terminal = @import("Terminal.zig");
 const Style = @import("Style.zig");
+const re = @import("re");
 
 var log_file: std.fs.File = undefined;
 
@@ -31,6 +32,10 @@ pub const Span = struct {
 
     pub fn width(self: Span) u32 {
         return self.end - self.start;
+    }
+
+    pub fn contains(self: Span, v: u32) bool {
+        return v >= self.start and v < self.end;
     }
 };
 
@@ -145,6 +150,11 @@ pub const Instruction = union(enum) {
     noop: void,
     movement: struct { movement: Movement, opts: MovementOpts = .{} },
     command: std.ArrayList(u8),
+    search: union(enum) {
+        complete: std.ArrayList(u8),
+        quit: void,
+        char: void,
+    },
     insertion: u8,
 };
 
@@ -179,13 +189,21 @@ pub const State = struct {
     cursor: Cursor = .{ .pos = .{ .x = 0, .y = 0 } },
     offset: Position = .{ .x = 0, .y = 0 },
 
+    gpa: std.mem.Allocator,
     terminal_size: *const Terminal.Size,
     buffer: Buffer,
     input_handler: InputHandler,
+    search_highlights: std.ArrayListUnmanaged(Span),
     have_command_line: bool = true,
 
     pub fn init(gpa: std.mem.Allocator, terminal: *const Terminal, buffer: Buffer) State {
-        return .{ .terminal_size = &terminal.size, .buffer = buffer, .input_handler = InputHandler.init(gpa) };
+        return .{
+            .gpa = gpa,
+            .terminal_size = &terminal.size,
+            .buffer = buffer,
+            .input_handler = InputHandler.init(gpa),
+            .search_highlights = .{},
+        };
     }
 
     /// Returns the size allocated to the buffer
@@ -238,6 +256,21 @@ pub const State = struct {
                     if (std.mem.eql(u8, "q", al.items)) std.os.exit(0);
                     if (std.mem.eql(u8, "w", al.items)) try self.buffer.save();
                     al.deinit();
+                },
+                .search => |s| switch (s) {
+                    .complete => |al| al.deinit(),
+                    .quit => self.search_highlights.clearRetainingCapacity(),
+                    .char => {
+                        self.search_highlights.clearRetainingCapacity();
+                        const matches = re.search(self.input_handler.cmd.items, self.buffer.data.items);
+                        defer matches.deinit();
+                        for (matches.matches) |match| {
+                            try self.search_highlights.append(self.gpa, .{
+                                .start = @intCast(u32, match.start),
+                                .end = @intCast(u32, match.end),
+                            });
+                        }
+                    },
                 },
                 .insertion => |c| {
                     const index = self.bufferIndex();
@@ -469,9 +502,11 @@ pub const State = struct {
             var iter = self.buffer.lineIterator();
             var i: u32 = 0;
             var skipped: u32 = 0;
+            var buf_index: u32 = 0;
             while (iter.next()) |line| {
                 if (skipped < self.offset.y) {
                     skipped += 1;
+                    buf_index += @intCast(u32, line.len) + 1;
                     continue;
                 }
                 if (i >= self.size().height) break;
@@ -481,7 +516,23 @@ pub const State = struct {
                     try line_style.print(writer, "│", .{});
                 } else try line_style.print(writer, " {:[1]}│", .{ i + skipped + 1, line_len });
 
-                _ = try writer.write(line);
+                for (line) |c| {
+                    const highlight = b: {
+                        for (self.search_highlights.items) |hl| {
+                            if (hl.contains(buf_index)) break :b true;
+                        }
+                        break :b false;
+                    };
+
+                    if (highlight) {
+                        try (Style{ .foreground = Style.grey, .background = Style.pink }).print(writer, "{c}", .{c});
+                    } else {
+                        _ = try writer.write(&.{c});
+                    }
+
+                    buf_index += 1;
+                }
+                buf_index += 1;
                 _ = try writer.write("\x1b[1E");
                 i += 1;
             }
@@ -490,6 +541,8 @@ pub const State = struct {
         // Command
         if (self.input_handler.mode == .command) {
             try writer.print(":{s}", .{self.input_handler.cmd.items});
+        } else if (self.input_handler.mode == .search) {
+            try writer.print("/{s}", .{self.input_handler.cmd.items});
         } else {
             // Cursor position
             _ = try writer.print("\x1b[{};{}H", .{
@@ -519,6 +572,7 @@ pub const Mode = union(enum) {
     normal: NormalModeState,
     insert,
     command,
+    search,
 };
 
 pub const InputHandler = struct {
@@ -576,6 +630,10 @@ pub const InputHandler = struct {
                             },
                             ':' => {
                                 self.mode = .command;
+                                return instructions;
+                            },
+                            '/' => {
+                                self.mode = .search;
                                 return instructions;
                             },
                             'i' => {
@@ -684,6 +742,29 @@ pub const InputHandler = struct {
                         else => {
                             if (c < 32 or c > 126) return instructions;
                             try self.cmd.append(self.gpa, c);
+                            return instructions;
+                        },
+                    },
+                    .search => switch (c) {
+                        13 => {
+                            // RET
+                            const al = self.cmd.toManaged(self.gpa);
+                            self.cmd = .{};
+                            self.mode = .{ .normal = .none };
+                            instructions[0] = .{ .search = .{ .complete = al } };
+                            return instructions;
+                        },
+                        27 => {
+                            // ESC
+                            self.mode = .{ .normal = .none };
+                            self.cmd.clearRetainingCapacity();
+                            instructions[0] = .{ .search = .quit };
+                            return instructions;
+                        },
+                        else => {
+                            if (c < 32 or c > 126) return instructions;
+                            try self.cmd.append(self.gpa, c);
+                            instructions[0] = .{ .search = .char };
                             return instructions;
                         },
                     },

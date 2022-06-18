@@ -1,0 +1,3 @@
+[submodule "third_party/zig-rs-regex"]
+	path = third_party/zig-rs-regex
+	url = https://github.com/mattyhall/zig-rs-regex

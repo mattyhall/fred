@@ -1,4 +1,5 @@
 const std = @import("std");
+const re_build = @import("third_party/zig-rs-regex/build.zig");
 
 pub fn build(b: *std.build.Builder) void {
     // Standard target options allows the person running `zig build` to choose
@@ -14,6 +15,8 @@ pub fn build(b: *std.build.Builder) void {
     const exe = b.addExecutable("fred", "src/main.zig");
     exe.setTarget(target);
     exe.setBuildMode(mode);
+    re_build.linkRe(b, mode, exe);
+    exe.addPackagePath("re", "third_party/zig-rs-regex/src/main.zig");
     exe.linkLibC();
     exe.install();
 
