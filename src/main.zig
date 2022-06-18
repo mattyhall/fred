@@ -247,6 +247,68 @@ pub const State = struct {
         self.cursor.pos = .{ .x = x, .y = y };
     }
 
+    fn moveToNextMatch(self: *State, matches: re.Matches, col: u32, row: u32) void {
+        if (matches.matches.len == 0) return;
+
+        var iter = self.buffer.lineIterator();
+        var buf_pos: u32 = 0;
+        var line: u32 = 0;
+        while (iter.next()) |l| {
+            if (line >= row) break;
+            buf_pos += @intCast(u32, l.len) + 1;
+            line += 1;
+        }
+        buf_pos += col;
+
+        var pos: ?u32 = null;
+        for (matches.matches) |m| {
+            if (m.start >= buf_pos) {
+                pos = @intCast(u32, m.start);
+                break;
+            }
+        }
+
+        if (pos == null) {
+            self.moveToNextMatch(matches, 0, 0);
+            return;
+        }
+
+        if (pos.? == buf_pos) return;
+
+        if (pos.? < buf_pos + (self.buffer.lineAt(line).len + 1) - col) {
+            self.cursor.pos.x = pos.? - buf_pos;
+
+            if (line < self.size().height) {
+                self.cursor.pos.y = line;
+                self.offset = .{ .x = 0, .y = 0 };
+            } else {
+                self.cursor.pos.y = self.size().height;
+                self.offset.y = line - self.size().height / 2;
+            }
+            return;
+        }
+
+        buf_pos += (@intCast(u32, self.buffer.lineAt(line).len) + 1) - col;
+        line += 1;
+
+        while (iter.next()) |l| {
+            if (buf_pos <= pos.? and buf_pos + @intCast(u32, l.len) + 1 > pos.?) {
+                if (line < self.size().height) {
+                    self.cursor.pos = .{ .x = pos.? - buf_pos, .y = line };
+                    self.offset = .{ .x = 0, .y = 0 };
+                    return;
+                }
+
+                self.cursor.pos = .{ .x = pos.? - buf_pos, .y = self.size().height / 2 };
+                self.offset = .{ .x = 0, .y = line - self.size().height / 2 };
+                return;
+            }
+
+            buf_pos += @intCast(u32, l.len) + 1;
+            line += 1;
+        }
+    }
+
     fn handleInput(self: *State, ch: u8) !void {
         const input = (try self.input_handler.handleInput(ch)) orelse return;
         for (input) |i| {
@@ -258,8 +320,8 @@ pub const State = struct {
                     al.deinit();
                 },
                 .search => |s| switch (s) {
-                    .complete => |al| al.deinit(),
                     .quit => self.search_highlights.clearRetainingCapacity(),
+                    .complete => |al| al.deinit(),
                     .char => {
                         self.search_highlights.clearRetainingCapacity();
                         const matches = re.search(self.input_handler.cmd.items, self.buffer.data.items);
@@ -270,26 +332,8 @@ pub const State = struct {
                                 .end = @intCast(u32, match.end),
                             });
                         }
-                        if (matches.matches.len > 0) {
-                            const pos = matches.matches[0].start;
-                            var iter = self.buffer.lineIterator();
-                            var buf_pos: u32 = 0;
-                            var line: u32 = 0;
-                            while (iter.next()) |l| {
-                                if (buf_pos <= pos and buf_pos + @intCast(u32, l.len) + 1 > pos) {
-                                    if (line < self.size().height) {
-                                        self.cursor.pos = .{ .x = @intCast(u32, pos) - buf_pos, .y = line };
-                                        self.offset = .{ .x = 0, .y = 0 };
-                                        return;
-                                    }
-
-                                    self.cursor.pos = .{ .x = @intCast(u32, pos) - buf_pos, .y = self.size().height / 2 };
-                                    self.offset = .{ .x = 0, .y = line - self.size().height / 2 };
-                                }
-                                buf_pos += @intCast(u32, l.len) + 1;
-                                line += 1;
-                            }
-                        }
+                        const pos = self.bufferCursorPos();
+                        self.moveToNextMatch(matches, pos.x, pos.y);
                     },
                 },
                 .insertion => |c| {
