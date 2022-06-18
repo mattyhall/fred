@@ -154,6 +154,7 @@ pub const Instruction = union(enum) {
         complete: std.ArrayList(u8),
         quit: void,
         char: void,
+        next: void,
     },
     insertion: u8,
 };
@@ -194,6 +195,7 @@ pub const State = struct {
     buffer: Buffer,
     input_handler: InputHandler,
     search_highlights: std.ArrayListUnmanaged(Span),
+    matches: ?re.Matches = null,
     have_command_line: bool = true,
 
     pub fn init(gpa: std.mem.Allocator, terminal: *const Terminal, buffer: Buffer) State {
@@ -247,7 +249,8 @@ pub const State = struct {
         self.cursor.pos = .{ .x = x, .y = y };
     }
 
-    fn moveToNextMatch(self: *State, matches: re.Matches, col: u32, row: u32) void {
+    fn moveToNextMatch(self: *State, col: u32, row: u32, skip_current: bool) void {
+        const matches = self.matches orelse return;
         if (matches.matches.len == 0) return;
 
         var iter = self.buffer.lineIterator();
@@ -262,14 +265,14 @@ pub const State = struct {
 
         var pos: ?u32 = null;
         for (matches.matches) |m| {
-            if (m.start >= buf_pos) {
+            if ((skip_current and m.start > buf_pos) or (!skip_current and m.start >= buf_pos)) {
                 pos = @intCast(u32, m.start);
                 break;
             }
         }
 
         if (pos == null) {
-            self.moveToNextMatch(matches, 0, 0);
+            self.moveToNextMatch(0, 0, false);
             return;
         }
 
@@ -324,16 +327,20 @@ pub const State = struct {
                     .complete => |al| al.deinit(),
                     .char => {
                         self.search_highlights.clearRetainingCapacity();
-                        const matches = re.search(self.input_handler.cmd.items, self.buffer.data.items);
-                        defer matches.deinit();
-                        for (matches.matches) |match| {
+                        if (self.matches) |m| m.deinit();
+                        self.matches = re.search(self.input_handler.cmd.items, self.buffer.data.items);
+                        for (self.matches.?.matches) |match| {
                             try self.search_highlights.append(self.gpa, .{
                                 .start = @intCast(u32, match.start),
                                 .end = @intCast(u32, match.end),
                             });
                         }
                         const pos = self.bufferCursorPos();
-                        self.moveToNextMatch(matches, pos.x, pos.y);
+                        self.moveToNextMatch(pos.x, pos.y, false);
+                    },
+                    .next => {
+                        const pos = self.bufferCursorPos();
+                        self.moveToNextMatch(pos.x, pos.y, true);
                     },
                 },
                 .insertion => |c| {
@@ -696,6 +703,10 @@ pub const InputHandler = struct {
                     },
                     '/' => {
                         self.mode = .search;
+                        return instructions;
+                    },
+                    'n' => {
+                        instructions[0] = Instruction{ .search = .next };
                         return instructions;
                     },
                     'i' => {
