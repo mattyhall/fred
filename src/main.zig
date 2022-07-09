@@ -834,6 +834,11 @@ pub const InputHandler = struct {
                     instructions[0] = .{ .search = .quit };
                     return instructions;
                 },
+                127 => {
+                    _ = self.cmd.popOrNull();
+                    instructions[0] = .{ .search = .char };
+                    return instructions;
+                },
                 else => {
                     if (c < 32 or c > 126) return instructions;
                     try self.cmd.append(self.gpa, c);
