@@ -8,6 +8,9 @@ const Self = @This();
 
 pub const grey = Colour{ .r = 68, .g = 71, .b = 90 };
 pub const pink = Colour{ .r = 255, .g = 121, .b = 198 };
+pub const white = Colour{ .r = 255, .g = 255, .b = 255 };
+pub const green = Colour{ .r = 80, .g = 250, .b = 123 };
+pub const red = Colour{ .r = 255, .g = 85, .b = 85 };
 
 pub const Colour = struct {
     r: u8,
@@ -24,7 +27,7 @@ fn colour(writer: anytype, c: Colour) !void {
 }
 
 pub fn print(self: Self, writer: anytype, comptime format: []const u8, args: anytype) !void {
-    if (!self.foreground.eql(Colour{ .r = 255, .g = 255, .b = 255 })) {
+    if (!self.foreground.eql(white)) {
         _ = try writer.write("\x1b[38;");
         try colour(writer, self.foreground);
     }

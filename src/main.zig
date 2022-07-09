@@ -196,6 +196,7 @@ pub const State = struct {
     input_handler: InputHandler,
     search_highlights: std.ArrayListUnmanaged(Span),
     matches: ?re.Matches = null,
+    valid_regex: bool = true,
     have_command_line: bool = true,
 
     pub fn init(gpa: std.mem.Allocator, terminal: *const Terminal, buffer: Buffer) State {
@@ -328,7 +329,14 @@ pub const State = struct {
                     .char => {
                         self.search_highlights.clearRetainingCapacity();
                         if (self.matches) |m| m.deinit();
-                        self.matches = re.search(self.input_handler.cmd.items, self.buffer.data.items);
+                        var regex = re.Regex.init(self.input_handler.cmd.items) catch {
+                            self.matches = null;
+                            self.valid_regex = false;
+                            continue;
+                        };
+                        self.valid_regex = true;
+                        defer regex.deinit();
+                        self.matches = regex.search(self.buffer.data.items);
                         for (self.matches.?.matches) |match| {
                             try self.search_highlights.append(self.gpa, .{
                                 .start = @intCast(u32, match.start),
@@ -613,7 +621,9 @@ pub const State = struct {
         if (self.input_handler.mode == .command) {
             try writer.print(":{s}", .{self.input_handler.cmd.items});
         } else if (self.input_handler.mode == .search) {
-            try writer.print("/{s}", .{self.input_handler.cmd.items});
+            const colour = if (self.valid_regex) Style.green else Style.red;
+            try (Style{ .foreground = Style.grey, .background = colour }).print(writer, "search:", .{});
+            try writer.print(" {s}", .{self.input_handler.cmd.items});
         } else {
             // Cursor position
             _ = try writer.print("\x1b[{};{}H", .{
