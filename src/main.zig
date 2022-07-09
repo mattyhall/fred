@@ -644,6 +644,8 @@ pub const State = struct {
     pub fn deinit(self: *State) void {
         self.buffer.deinit();
         self.input_handler.deinit();
+        if (self.matches) |m| m.deinit();
+        self.search_highlights.deinit(self.gpa);
     }
 };
 
