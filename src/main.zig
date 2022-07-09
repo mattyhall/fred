@@ -254,6 +254,7 @@ pub const State = struct {
         const matches = self.matches orelse return;
         if (matches.matches.len == 0) return;
 
+        // Find buffer position of (col, row)
         var iter = self.buffer.lineIterator();
         var buf_pos: u32 = 0;
         var line: u32 = 0;
@@ -264,6 +265,7 @@ pub const State = struct {
         }
         buf_pos += col;
 
+        // Find pos of next match
         var pos: ?u32 = null;
         for (matches.matches) |m| {
             if ((skip_current and m.start > buf_pos) or (!skip_current and m.start >= buf_pos)) {
@@ -272,6 +274,7 @@ pub const State = struct {
             }
         }
 
+        // If there's no match after this one goes back to the start of the buffer
         if (pos == null) {
             self.moveToNextMatch(0, 0, false);
             return;
@@ -279,8 +282,9 @@ pub const State = struct {
 
         if (pos.? == buf_pos) return;
 
+        // If next match is on the same line as (col, row)
         if (pos.? < buf_pos + (self.buffer.lineAt(line).len + 1) - col) {
-            self.cursor.pos.x = pos.? - buf_pos;
+            self.cursor.pos.x += pos.? - buf_pos;
 
             if (line < self.size().height) {
                 self.cursor.pos.y = line;
@@ -1424,4 +1428,37 @@ test "state can't scroll past last line" {
     // Top '6', cursor on '10'
     try std.testing.expectEqual(Position{ .x = 0, .y = 4 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 5 }, state.offset);
+}
+
+test "search multiple one line" {
+    var gpa = std.testing.allocator;
+    const lit =
+        \\const re = @import("re");
+        \\
+        \\var log_file: std.fs.File = undefined;
+        \\
+        \\pub fn panic(msg: []const u8, error_return_trace: ?*std.builtin.StackTrace) noreturn {
+    ;
+    var data = try gpa.alloc(u8, lit.len);
+    std.mem.copy(u8, data, lit);
+
+    var terminal = Terminal{ .size = .{ .width = 10, .height = 5 } };
+    var state = State.init(gpa, &terminal, Buffer.fromSlice(gpa, data));
+    defer state.deinit();
+    state.have_command_line = false;
+    try state.buffer.calculateLines();
+
+    for ("/re\r") |c| {
+        try state.handleInput(c);
+    }
+    try std.testing.expectEqual(Position{ .x = 6, .y = 0 }, state.cursor.pos);
+
+    try state.handleInput('n');
+    try std.testing.expectEqual(Position{ .x = 20, .y = 0 }, state.cursor.pos);
+
+    try state.handleInput('n');
+    try std.testing.expectEqual(Position{ .x = 36, .y = 4 }, state.cursor.pos);
+
+    try state.handleInput('n');
+    try std.testing.expectEqual(Position{ .x = 78, .y = 4 }, state.cursor.pos);
 }
