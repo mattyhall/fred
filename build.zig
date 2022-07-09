@@ -32,6 +32,8 @@ pub fn build(b: *std.build.Builder) void {
     const exe_tests = b.addTest("src/main.zig");
     exe_tests.setTarget(target);
     exe_tests.setBuildMode(mode);
+    re_build.linkRe(b, mode, exe_tests);
+    exe_tests.addPackagePath("re", "third_party/zig-rs-regex/src/main.zig");
     exe_tests.linkLibC();
 
     const test_step = b.step("test", "Run unit tests");
