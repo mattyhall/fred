@@ -417,6 +417,11 @@ pub const State = struct {
             },
             .word_right => {
                 var line = self.buffer.lineAt(pos.y);
+                if (pos.x >= line.len) {
+                    self.move(.down, .{});
+                    self.move(.goto_line_start, .{});
+                    return;
+                }
                 const want_non_alpha = std.ascii.isAlNum(line[pos.x]);
                 var new_pos = pos;
                 var skipping_whitespace = false;
@@ -448,6 +453,10 @@ pub const State = struct {
             },
             .word_left => {
                 var line = self.buffer.lineAt(pos.y);
+                if (pos.x >= line.len) {
+                    self.move(.up, .{});
+                    self.move(.goto_line_end, .{});
+                }
                 const line_start = pos.x == 0;
                 if (line_start) {
                     if (pos.y == 0) return;
@@ -458,6 +467,7 @@ pub const State = struct {
 
                 var new_pos = self.bufferCursorPos();
                 line = self.buffer.lineAt(new_pos.y);
+                if (new_pos.x == 0) return;
                 var word_start = startOfWord(line[new_pos.x - 1], line[new_pos.x]);
                 if (word_start) {
                     // Find first character of the previous word
@@ -513,7 +523,7 @@ pub const State = struct {
                 self.offset = .{ .x = 0, .y = line - self.size().height / 2 };
             },
             .goto_line_start => self.cursor.pos.x = 0,
-            .goto_line_end => self.cursor.pos.x = self.buffer.lineSpan(pos.y).width() - 1,
+            .goto_line_end => self.cursor.pos.x = std.math.max(1, self.buffer.lineSpan(pos.y).width()) - 1,
             .goto_line_end_plus_one => {
                 self.move(.goto_line_end, .{});
                 self.move(.right, .{ .allow_past_last_column = true });
@@ -1047,6 +1057,35 @@ test "state word movement" {
         state.move(.word_left, .{});
         try std.testing.expectEqual(positions[@intCast(usize, i)], state.cursor.pos);
     }
+}
+
+test "state word movement blank line" {
+    var gpa = std.testing.allocator;
+    const lit =
+        \\word
+        \\
+        \\word
+    ;
+    var data = try gpa.alloc(u8, lit.len);
+    std.mem.copy(u8, data, lit);
+
+    const terminal = Terminal{ .size = .{ .width = 50, .height = 6 } };
+    var state = State.init(gpa, &terminal, Buffer.fromSlice(gpa, data));
+    defer state.deinit();
+    state.have_command_line = false;
+    try state.buffer.calculateLines();
+
+    state.move(.word_right, .{});
+    try std.testing.expectEqual(Position{.x = 0, .y = 1}, state.cursor.pos);
+
+    state.move(.word_right, .{});
+    try std.testing.expectEqual(Position{.x = 0, .y = 2}, state.cursor.pos);
+
+    state.move(.word_left, .{});
+    try std.testing.expectEqual(Position{.x = 0, .y = 1}, state.cursor.pos);
+
+    state.move(.word_left, .{});
+    try std.testing.expectEqual(Position{.x = 0, .y = 0}, state.cursor.pos);
 }
 
 test "state viewport" {
