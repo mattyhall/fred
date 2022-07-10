@@ -191,12 +191,16 @@ pub const State = struct {
     offset: Position = .{ .x = 0, .y = 0 },
 
     gpa: std.mem.Allocator,
+
     terminal_size: *const Terminal.Size,
     buffer: Buffer,
     input_handler: InputHandler,
+
+    current_search: ?std.ArrayList(u8) = null,
     search_highlights: std.ArrayListUnmanaged(Span),
     matches: ?re.Matches = null,
     valid_regex: bool = true,
+
     have_command_line: bool = true,
 
     pub fn init(gpa: std.mem.Allocator, terminal: *const Terminal, buffer: Buffer) State {
@@ -323,6 +327,31 @@ pub const State = struct {
         }
     }
 
+    fn refindMatches(self: *State) !void {
+        if (self.current_search) |s|
+            _ = try self.findMatches(s.items);
+    }
+
+    fn findMatches(self: *State, s: []const u8) !bool {
+        self.search_highlights.clearRetainingCapacity();
+        if (self.matches) |m| m.deinit();
+        var regex = re.Regex.init(s) catch {
+            self.matches = null;
+            self.valid_regex = false;
+            return false;
+        };
+        defer regex.deinit();
+        self.valid_regex = true;
+        self.matches = regex.search(self.buffer.data.items);
+        for (self.matches.?.matches) |match| {
+            try self.search_highlights.append(self.gpa, .{
+                .start = @intCast(u32, match.start),
+                .end = @intCast(u32, match.end),
+            });
+        }
+        return true;
+    }
+
     fn handleInput(self: *State, ch: u8) !void {
         const input = (try self.input_handler.handleInput(ch)) orelse return;
         for (input) |i| {
@@ -335,24 +364,12 @@ pub const State = struct {
                 },
                 .search => |s| switch (s) {
                     .quit => self.search_highlights.clearRetainingCapacity(),
-                    .complete => |al| al.deinit(),
+                    .complete => |al| {
+                        if (self.current_search) |q| q.deinit();
+                        self.current_search = al;
+                    },
                     .char => {
-                        self.search_highlights.clearRetainingCapacity();
-                        if (self.matches) |m| m.deinit();
-                        var regex = re.Regex.init(self.input_handler.cmd.items) catch {
-                            self.matches = null;
-                            self.valid_regex = false;
-                            continue;
-                        };
-                        self.valid_regex = true;
-                        defer regex.deinit();
-                        self.matches = regex.search(self.buffer.data.items);
-                        for (self.matches.?.matches) |match| {
-                            try self.search_highlights.append(self.gpa, .{
-                                .start = @intCast(u32, match.start),
-                                .end = @intCast(u32, match.end),
-                            });
-                        }
+                        if (!try self.findMatches(self.input_handler.cmd.items)) continue;
                         const pos = self.bufferCursorPos();
                         self.moveToNextMatch(pos.x, pos.y, false);
                     },
@@ -368,17 +385,20 @@ pub const State = struct {
                             if (index == 0) return;
                             _ = self.buffer.data.orderedRemove(index - 1);
                             try self.buffer.calculateLines();
+                            try self.refindMatches();
                             self.putCursorAtIndex(index - 1);
                         },
                         13 => { // RET
                             try self.buffer.data.insert(self.buffer.gpa, index, '\n');
                             try self.buffer.calculateLines();
+                            try self.refindMatches();
                             self.move(.down, .{});
                             self.move(.goto_line_start, .{});
                         },
                         else => {
                             try self.buffer.data.insert(self.buffer.gpa, index, c);
                             try self.buffer.calculateLines();
+                            try self.refindMatches();
                             self.move(.right, .{ .allow_past_last_column = true });
                         },
                     }
@@ -665,6 +685,7 @@ pub const State = struct {
     pub fn deinit(self: *State) void {
         self.buffer.deinit();
         self.input_handler.deinit();
+        if (self.current_search) |s| s.deinit();
         if (self.matches) |m| m.deinit();
         self.search_highlights.deinit(self.gpa);
     }
@@ -1533,11 +1554,11 @@ test "end of blank line then letter" {
 test "backspace at top of viewport" {
     var gpa = std.testing.allocator;
     const lit =
-    \\zero
-    \\one
-    \\two
-    \\three
-    \\four
+        \\zero
+        \\one
+        \\two
+        \\three
+        \\four
     ;
     var data = try gpa.alloc(u8, lit.len);
     std.mem.copy(u8, data, lit);
@@ -1554,7 +1575,7 @@ test "backspace at top of viewport" {
     try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 3 }, state.offset);
 
-    for ([_]u8{'i', 127}) |c| {
+    for ([_]u8{ 'i', 127 }) |c| {
         try state.handleInput(c);
     }
 
