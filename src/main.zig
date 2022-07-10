@@ -247,7 +247,21 @@ pub const State = struct {
 
             x += 1;
         }
-        self.cursor.pos = .{ .x = x, .y = y };
+
+        const pos = self.bufferCursorPos();
+        self.cursor.pos.x = x;
+        if (y < pos.y) {
+            const diff = pos.y - y;
+            if (diff > self.cursor.pos.y) {
+                const remaining_diff = diff - self.cursor.pos.y;
+                self.cursor.pos.y = 0;
+                self.offset.y -= remaining_diff;
+            } else {
+                self.cursor.pos.y -= diff;
+            }
+        } else {
+            @panic("not sure how to handle this yet");
+        }
     }
 
     fn moveToNextMatch(self: *State, col: u32, row: u32, skip_current: bool) void {
@@ -1522,4 +1536,36 @@ test "end of blank line then letter" {
         try state.handleInput(c);
     }
     try std.testing.expectEqualStrings("o\nhello", state.buffer.data.items);
+}
+
+test "backspace at top of viewport" {
+    var gpa = std.testing.allocator;
+    const lit =
+    \\zero
+    \\one
+    \\two
+    \\three
+    \\four
+    ;
+    var data = try gpa.alloc(u8, lit.len);
+    std.mem.copy(u8, data, lit);
+
+    var terminal = Terminal{ .size = .{ .width = 10, .height = 2 } };
+    var state = State.init(gpa, &terminal, Buffer.fromSlice(gpa, data));
+    defer state.deinit();
+    state.have_command_line = false;
+    try state.buffer.calculateLines();
+
+    state.move(.goto_file_end, .{});
+    state.move(.up, .{});
+    state.move(.goto_line_start, .{});
+    try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.cursor.pos);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 3 }, state.offset);
+
+    for ([_]u8{'i', 127}) |c| {
+        try state.handleInput(c);
+    }
+
+    try std.testing.expectEqual(Position{ .x = 3, .y = 0 }, state.cursor.pos);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 2 }, state.offset);
 }
