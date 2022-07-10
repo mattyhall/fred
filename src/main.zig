@@ -526,7 +526,8 @@ pub const State = struct {
             .goto_line_end => self.cursor.pos.x = std.math.max(1, self.buffer.lineSpan(pos.y).width()) - 1,
             .goto_line_end_plus_one => {
                 self.move(.goto_line_end, .{});
-                self.move(.right, .{ .allow_past_last_column = true });
+                if (self.buffer.lineSpan(self.bufferCursorPos().y).width() > 0)
+                    self.move(.right, .{ .allow_past_last_column = true });
             },
             .page_up => {
                 self.offset.y = std.math.max(self.offset.y, self.size().height - 1) - (self.size().height - 1);
@@ -1076,16 +1077,16 @@ test "state word movement blank line" {
     try state.buffer.calculateLines();
 
     state.move(.word_right, .{});
-    try std.testing.expectEqual(Position{.x = 0, .y = 1}, state.cursor.pos);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 1 }, state.cursor.pos);
 
     state.move(.word_right, .{});
-    try std.testing.expectEqual(Position{.x = 0, .y = 2}, state.cursor.pos);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 2 }, state.cursor.pos);
 
     state.move(.word_left, .{});
-    try std.testing.expectEqual(Position{.x = 0, .y = 1}, state.cursor.pos);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 1 }, state.cursor.pos);
 
     state.move(.word_left, .{});
-    try std.testing.expectEqual(Position{.x = 0, .y = 0}, state.cursor.pos);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.cursor.pos);
 }
 
 test "state viewport" {
@@ -1500,4 +1501,25 @@ test "search multiple one line" {
 
     try state.handleInput('n');
     try std.testing.expectEqual(Position{ .x = 78, .y = 4 }, state.cursor.pos);
+}
+
+test "end of blank line then letter" {
+    var gpa = std.testing.allocator;
+    const lit =
+        \\
+        \\hello
+    ;
+    var data = try gpa.alloc(u8, lit.len);
+    std.mem.copy(u8, data, lit);
+
+    var terminal = Terminal{ .size = .{ .width = 10, .height = 5 } };
+    var state = State.init(gpa, &terminal, Buffer.fromSlice(gpa, data));
+    defer state.deinit();
+    state.have_command_line = false;
+    try state.buffer.calculateLines();
+
+    for ("Ao") |c| {
+        try state.handleInput(c);
+    }
+    try std.testing.expectEqualStrings("o\nhello", state.buffer.data.items);
 }
