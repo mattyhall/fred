@@ -299,14 +299,6 @@ pub const State = struct {
         // If next match is on the same line as (col, row)
         if (pos.? < buf_pos + (self.buffer.lineAt(line).len + 1) - col) {
             self.cursor.pos.x += pos.? - buf_pos;
-
-            if (line < self.size().height) {
-                self.cursor.pos.y = line;
-                self.offset = .{ .x = 0, .y = 0 };
-            } else {
-                self.cursor.pos.y = self.size().height;
-                self.offset.y = line - self.size().height / 2;
-            }
             return;
         }
 
