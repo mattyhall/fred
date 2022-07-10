@@ -177,6 +177,7 @@ pub const Movement = union(enum) {
     goto_file_top,
     goto_file_end,
     goto_line_start,
+    goto_line_start_skip_whitespace,
     goto_line_end,
     goto_line_end_plus_one,
 };
@@ -549,6 +550,15 @@ pub const State = struct {
                 self.offset = .{ .x = 0, .y = line - self.size().height / 2 };
             },
             .goto_line_start => self.cursor.pos.x = 0,
+            .goto_line_start_skip_whitespace => {
+                const line = self.buffer.lineAt(pos.y);
+                var x: u32 = 0;
+                for (line) |ch| {
+                    if (!std.ascii.isSpace(ch)) break;
+                    x += 1;
+                }
+                self.cursor.pos.x = x;
+            },
             .goto_line_end => self.cursor.pos.x = std.math.max(1, self.buffer.lineSpan(pos.y).width()) - 1,
             .goto_line_end_plus_one => {
                 self.move(.goto_line_end, .{});
@@ -823,6 +833,10 @@ pub const InputHandler = struct {
                     'h' => blk: {
                         self.mode = .{ .normal = .none };
                         break :blk Movement.goto_line_start;
+                    },
+                    'i' => blk: {
+                        self.mode = .{ .normal = .none };
+                        break :blk Movement.goto_line_start_skip_whitespace;
                     },
                     'l' => blk: {
                         self.mode = .{ .normal = .none };
@@ -1241,6 +1255,34 @@ test "state goto start/end of line" {
     state.move(.goto_line_end, .{});
     try std.testing.expectEqual(Position{ .x = 23, .y = 1 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 1 }, state.offset);
+}
+
+test "state goto start of line skip whitespace" {
+    var gpa = std.testing.allocator;
+    const lit =
+        \\helloworldhowareyoutoday
+        \\    helloworldhowareyoutoday
+    ;
+    var data = try gpa.alloc(u8, lit.len);
+    std.mem.copy(u8, data, lit);
+
+    var terminal = Terminal{ .size = .{ .width = 100, .height = 2 } };
+    var state = State.init(gpa, &terminal, Buffer.fromSlice(gpa, data));
+    defer state.deinit();
+    state.have_command_line = false;
+    try state.buffer.calculateLines();
+
+    state.move(.goto_line_end, .{});
+    try std.testing.expectEqual(Position{ .x = 23, .y = 0 }, state.cursor.pos);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.offset);
+
+    state.move(.down, .{});
+    try std.testing.expectEqual(Position{ .x = 23, .y = 1 }, state.cursor.pos);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.offset);
+
+    state.move(.goto_line_start_skip_whitespace, .{});
+    try std.testing.expectEqual(Position{ .x = 4, .y = 1 }, state.cursor.pos);
+    try std.testing.expectEqual(Position{ .x = 0, .y = 0 }, state.offset);
 }
 
 test "state goto line" {
