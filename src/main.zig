@@ -157,6 +157,7 @@ pub const Instruction = union(enum) {
         next: void,
     },
     insertion: u8,
+    copy_whitespace_from_above: void,
 };
 
 pub const Movement = union(enum) {
@@ -264,8 +265,14 @@ pub const State = struct {
             } else {
                 self.cursor.pos.y -= diff;
             }
-        } else {
-            @panic("not sure how to handle this yet");
+        } else if (y > pos.y) {
+            const diff = y - pos.y;
+            if (diff > self.terminal_size.height) {
+                self.cursor.pos.y = 0;
+                self.offset.y = diff;
+            } else {
+                self.cursor.pos.y += diff;
+            }
         }
     }
 
@@ -392,9 +399,10 @@ pub const State = struct {
                         13 => { // RET
                             try self.buffer.data.insert(self.buffer.gpa, index, '\n');
                             try self.buffer.calculateLines();
-                            try self.refindMatches();
                             self.move(.down, .{});
                             self.move(.goto_line_start, .{});
+                            try self.copyWhitespaceFromAbove();
+                            try self.refindMatches();
                         },
                         else => {
                             try self.buffer.data.insert(self.buffer.gpa, index, c);
@@ -404,8 +412,27 @@ pub const State = struct {
                         },
                     }
                 },
+                .copy_whitespace_from_above => try self.copyWhitespaceFromAbove(),
                 .noop => {},
             }
+        }
+    }
+
+    fn copyWhitespaceFromAbove(self: *State) !void {
+        const pos = self.bufferCursorPos();
+        if (pos.y == 0) return;
+        const line_above = self.buffer.lineAt(pos.y - 1);
+        var index: ?u32 = null;
+        for (line_above) |c, n| {
+            if (!std.ascii.isSpace(c)) break;
+            index = @intCast(u32, n);
+        }
+        if (index) |idx| {
+            const buffer_index = self.bufferIndex();
+            try self.buffer.data.insertSlice(self.buffer.gpa, buffer_index, line_above[0 .. idx + 1]);
+            try self.buffer.calculateLines();
+            try self.refindMatches();
+            self.move(.goto_line_end_plus_one, .{});
         }
     }
 
@@ -811,7 +838,7 @@ pub const InputHandler = struct {
                         };
                         instructions[1] = .{ .insertion = 13 };
                         instructions[2] = .{ .movement = .{ .movement = Movement.up } };
-                        instructions[3] = .{ .movement = .{ .movement = Movement.goto_line_start } };
+                        instructions[3] = .copy_whitespace_from_above;
                         return instructions;
                     },
                     '1', '2', '3', '4', '5', '6', '7', '8', '9', '0' => {
@@ -1623,4 +1650,38 @@ test "backspace at top of viewport" {
 
     try std.testing.expectEqual(Position{ .x = 3, .y = 0 }, state.cursor.pos);
     try std.testing.expectEqual(Position{ .x = 0, .y = 2 }, state.offset);
+}
+
+test "autoindent" {
+    var gpa = std.testing.allocator;
+    const lit =
+        \\  hello
+        \\  world
+    ;
+    var data = try gpa.alloc(u8, lit.len);
+    std.mem.copy(u8, data, lit);
+
+    var terminal = Terminal{ .size = .{ .width = 10, .height = 5 } };
+    var state = State.init(gpa, &terminal, Buffer.fromSlice(gpa, data));
+    defer state.deinit();
+    state.have_command_line = false;
+    try state.buffer.calculateLines();
+
+    state.move(.down, .{});
+
+    for ("O1") |c| {
+        try state.handleInput(c);
+    }
+    try std.testing.expectEqualStrings("  hello\n  1\n  world", state.buffer.data.items);
+
+    try state.handleInput('\x1b');
+    for ("o2") |c| {
+        try state.handleInput(c);
+    }
+    try std.testing.expectEqualStrings("  hello\n  1\n  2\n  world", state.buffer.data.items);
+
+    for ("\r3") |c| {
+        try state.handleInput(c);
+    }
+    try std.testing.expectEqualStrings("  hello\n  1\n  2\n  3\n  world", state.buffer.data.items);
 }
