@@ -11,6 +11,7 @@ pub const pink = Colour{ .r = 255, .g = 121, .b = 198 };
 pub const white = Colour{ .r = 255, .g = 255, .b = 255 };
 pub const green = Colour{ .r = 80, .g = 250, .b = 123 };
 pub const red = Colour{ .r = 255, .g = 85, .b = 85 };
+pub const blue = Colour{ .r = 139, .g = 233, .b = 253 };
 
 pub const Colour = struct {
     r: u8,

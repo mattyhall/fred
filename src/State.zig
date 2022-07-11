@@ -529,6 +529,8 @@ pub fn draw(self: *const Self, writer: anytype) !void {
         try (Style{ .foreground = Style.grey, .background = colour }).print(writer, "search:", .{});
         try writer.print(" {s}", .{self.input_handler.cmd.items});
     } else {
+        try self.drawStatusLine(writer);
+
         // Cursor position
         _ = try writer.print("\x1b[{};{}H", .{
             self.cursor.pos.y + 1,
@@ -542,7 +544,32 @@ pub fn draw(self: *const Self, writer: anytype) !void {
     } else {
         // Block cursor
         _ = try writer.write("\x1b[2 q");
-    }}
+    }
+}
+
+fn drawStatusLine(self: *const Self, writer: anytype) !void {
+    var buf: [1024]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&buf);
+
+    const pos = self.bufferCursorPos();
+    const pos_s = try std.fmt.allocPrint(fba.allocator(), "{}:{}", .{pos.y+1, pos.x+1});
+
+    const pc = (pos.y * 100) / self.buffer.lines.items.len;
+    const pc_s = try std.fmt.allocPrint(fba.allocator(), "{}%", .{pc});
+
+    const path = self.buffer.path orelse @as([]const u8, std.mem.sliceTo("scratch", 0));
+
+    const len = path.len + 1 + pos_s.len + 1 + pc_s.len;
+
+    _ = try writer.print("\x1b[{};{}H", .{
+        self.terminal_size.height,
+        self.terminal_size.width - len - 1,
+    });
+
+    try (Style{ .foreground = Style.green }).print(writer, "{s} ", .{path});
+    try (Style{ .foreground = Style.blue }).print(writer, "{s} ", .{pos_s});
+    try (Style{ .foreground = Style.blue }).print(writer, "{s}", .{pc_s});
+}
 
 pub fn deinit(self: *Self) void {
     self.buffer.deinit();
