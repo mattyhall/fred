@@ -281,4 +281,3 @@ pub const InputHandler = struct {
         return instructions;
     }
 };
-

@@ -548,7 +548,7 @@ fn drawStatusLine(self: *const Self, writer: anytype) !void {
     var fba = std.heap.FixedBufferAllocator.init(&buf);
 
     const pos = self.bufferCursorPos();
-    const pos_s = try std.fmt.allocPrint(fba.allocator(), "{}:{}", .{pos.y+1, pos.x+1});
+    const pos_s = try std.fmt.allocPrint(fba.allocator(), "{}:{}", .{ pos.y + 1, pos.x + 1 });
 
     const pc = (pos.y * 100) / self.buffer.lines.items.len;
     const pc_s = try std.fmt.allocPrint(fba.allocator(), "{}%", .{pc});
@@ -564,7 +564,7 @@ fn drawStatusLine(self: *const Self, writer: anytype) !void {
         self.terminal_size.width - len - 1,
     });
 
-    try (Style{ .foreground = Style.green }).print(writer, "{s}{s} ", .{path, modified});
+    try (Style{ .foreground = Style.green }).print(writer, "{s}{s} ", .{ path, modified });
     try (Style{ .foreground = Style.blue }).print(writer, "{s} ", .{pos_s});
     try (Style{ .foreground = Style.blue }).print(writer, "{s}", .{pc_s});
 }
