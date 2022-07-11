@@ -15,7 +15,7 @@ gpa: std.mem.Allocator,
 
 terminal_size: *const Terminal.Size,
 buffer: Buffer,
-input_handler: input.InputHandler,
+input_handler: *input.InputHandler,
 
 current_search: ?std.ArrayList(u8) = null,
 search_highlights: std.ArrayListUnmanaged(ds.Span),
@@ -31,12 +31,12 @@ fn startOfWord(previous: u8, current: u8) bool {
     return (c_alpha and (p_space or !p_alpha)) or (!c_alpha and (p_space or p_alpha));
 }
 
-pub fn init(gpa: std.mem.Allocator, terminal: *const Terminal, buffer: Buffer) Self {
+pub fn init(gpa: std.mem.Allocator, terminal: *const Terminal, input_handler: *input.InputHandler, buffer: Buffer) Self {
     return .{
         .gpa = gpa,
         .terminal_size = &terminal.size,
         .buffer = buffer,
-        .input_handler = input.InputHandler.init(gpa),
+        .input_handler = input_handler,
         .search_highlights = .{},
     };
 }
@@ -49,7 +49,7 @@ pub fn size(self: *const Self) Terminal.Size {
     return sz;
 }
 
-fn bufferCursorPos(self: *const Self) ds.Position {
+pub fn bufferCursorPos(self: *const Self) ds.Position {
     return .{ .x = self.cursor.pos.x + self.offset.x, .y = self.cursor.pos.y + self.offset.y };
 }
 
@@ -186,16 +186,10 @@ fn findMatches(self: *Self, s: []const u8) !bool {
     return true;
 }
 
-pub fn handleInput(self: *Self, ch: u8) !void {
-    const inp = (try self.input_handler.handleInput(ch)) orelse return;
-    for (inp) |i| {
+pub fn handleInput(self: *Self, instructions: []const input.Instruction) !void {
+    for (instructions) |i| {
         switch (i) {
             .movement => |m| self.move(m.movement, m.opts),
-            .command => |al| {
-                if (std.mem.eql(u8, "q", al.items)) std.os.exit(0);
-                if (std.mem.eql(u8, "w", al.items)) try self.buffer.save();
-                al.deinit();
-            },
             .search => |s| switch (s) {
                 .quit => self.search_highlights.clearRetainingCapacity(),
                 .complete => |al| {
@@ -236,7 +230,7 @@ pub fn handleInput(self: *Self, ch: u8) !void {
                 }
             },
             .copy_whitespace_from_above => try self.copyWhitespaceFromAbove(),
-            .noop => {},
+            .noop, .command => {},
         }
     }
 }
@@ -470,10 +464,9 @@ fn move(self: *Self, movement: input.Movement, opts: input.MovementOpts) void {
 }
 
 pub fn draw(self: *const Self, writer: anytype) !void {
-    _ = try writer.write("\x1b[2J");
-    _ = try writer.write("\x1b[1;1H");
-
     const line_len = std.math.log10(self.buffer.lines.items.len) + 1;
+
+    _ = try writer.write("\x1b[1;1H");
 
     // Line numbers and editor
     {
@@ -517,61 +510,15 @@ pub fn draw(self: *const Self, writer: anytype) !void {
         }
     }
 
-    // Command
-    if (self.input_handler.mode == .command) {
-        try writer.print(":{s}", .{self.input_handler.cmd.items});
-    } else if (self.input_handler.mode == .search) {
-        const colour = if (self.valid_regex) Style.green else Style.red;
-        try (Style{ .foreground = Style.grey, .background = colour }).print(writer, "search:", .{});
-        try writer.print(" {s}", .{self.input_handler.cmd.items});
-    } else {
-        try self.drawStatusLine(writer);
-
-        // Cursor position
-        _ = try writer.print("\x1b[{};{}H", .{
-            self.cursor.pos.y + 1,
-            self.cursor.pos.x + line_len + 2 + 1,
-        });
-    }
-
-    if (self.input_handler.mode == .insert) {
-        // Bar cursor
-        _ = try writer.write("\x1b[6 q");
-    } else {
-        // Block cursor
-        _ = try writer.write("\x1b[2 q");
-    }
-}
-
-fn drawStatusLine(self: *const Self, writer: anytype) !void {
-    var buf: [1024]u8 = undefined;
-    var fba = std.heap.FixedBufferAllocator.init(&buf);
-
-    const pos = self.bufferCursorPos();
-    const pos_s = try std.fmt.allocPrint(fba.allocator(), "{}:{}", .{ pos.y + 1, pos.x + 1 });
-
-    const pc = (pos.y * 100) / self.buffer.lines.items.len;
-    const pc_s = try std.fmt.allocPrint(fba.allocator(), "{}%", .{pc});
-
-    const path = self.buffer.path orelse @as([]const u8, std.mem.sliceTo("scratch", 0));
-
-    const modified = if (self.buffer.dirty) "[+]" else "";
-
-    const len = path.len + modified.len + 1 + pos_s.len + 1 + pc_s.len;
-
+    // Cursor position
     _ = try writer.print("\x1b[{};{}H", .{
-        self.terminal_size.height,
-        self.terminal_size.width - len - 1,
+        self.cursor.pos.y + 1,
+        self.cursor.pos.x + line_len + 2 + 1,
     });
-
-    try (Style{ .foreground = Style.green }).print(writer, "{s}{s} ", .{ path, modified });
-    try (Style{ .foreground = Style.blue }).print(writer, "{s} ", .{pos_s});
-    try (Style{ .foreground = Style.blue }).print(writer, "{s}", .{pc_s});
 }
 
 pub fn deinit(self: *Self) void {
     self.buffer.deinit();
-    self.input_handler.deinit();
     if (self.current_search) |s| s.deinit();
     if (self.matches) |m| m.deinit();
     self.search_highlights.deinit(self.gpa);
@@ -587,7 +534,9 @@ test "state word movement" {
     std.mem.copy(u8, data, lit);
 
     const terminal = Terminal{ .size = .{ .width = 50, .height = 6 } };
-    var state = Self.init(gpa, &terminal, Buffer.fromSlice(gpa, data));
+    var handler = input.InputHandler.init(gpa);
+    defer handler.deinit();
+    var state = Self.init(gpa, &terminal, &handler, Buffer.fromSlice(gpa, data));
     defer state.deinit();
     state.have_command_line = false;
     try state.buffer.calculateLines();
@@ -626,7 +575,9 @@ test "state word movement blank line" {
     std.mem.copy(u8, data, lit);
 
     const terminal = Terminal{ .size = .{ .width = 50, .height = 6 } };
-    var state = Self.init(gpa, &terminal, Buffer.fromSlice(gpa, data));
+    var handler = input.InputHandler.init(gpa);
+    defer handler.deinit();
+    var state = Self.init(gpa, &terminal, &handler, Buffer.fromSlice(gpa, data));
     defer state.deinit();
     state.have_command_line = false;
     try state.buffer.calculateLines();
@@ -658,7 +609,9 @@ test "state viewport" {
     std.mem.copy(u8, data, lit);
 
     const terminal = Terminal{ .size = .{ .width = 6, .height = 3 } };
-    var state = Self.init(gpa, &terminal, Buffer.fromSlice(gpa, data));
+    var handler = input.InputHandler.init(gpa);
+    defer handler.deinit();
+    var state = Self.init(gpa, &terminal, &handler, Buffer.fromSlice(gpa, data));
     defer state.deinit();
     state.have_command_line = false;
     try state.buffer.calculateLines();
@@ -715,7 +668,9 @@ test "state goto top/bottom" {
     std.mem.copy(u8, data, lit);
 
     var terminal = Terminal{ .size = .{ .width = 10, .height = 5 } };
-    var state = Self.init(gpa, &terminal, Buffer.fromSlice(gpa, data));
+    var handler = input.InputHandler.init(gpa);
+    defer handler.deinit();
+    var state = Self.init(gpa, &terminal, &handler, Buffer.fromSlice(gpa, data));
     defer state.deinit();
     state.have_command_line = false;
     try state.buffer.calculateLines();
@@ -747,7 +702,9 @@ test "state goto start/end of line" {
     std.mem.copy(u8, data, lit);
 
     var terminal = Terminal{ .size = .{ .width = 100, .height = 2 } };
-    var state = Self.init(gpa, &terminal, Buffer.fromSlice(gpa, data));
+    var handler = input.InputHandler.init(gpa);
+    defer handler.deinit();
+    var state = Self.init(gpa, &terminal, &handler, Buffer.fromSlice(gpa, data));
     defer state.deinit();
     state.have_command_line = false;
     try state.buffer.calculateLines();
@@ -781,7 +738,9 @@ test "state goto start of line skip whitespace" {
     std.mem.copy(u8, data, lit);
 
     var terminal = Terminal{ .size = .{ .width = 100, .height = 2 } };
-    var state = Self.init(gpa, &terminal, Buffer.fromSlice(gpa, data));
+    var handler = input.InputHandler.init(gpa);
+    defer handler.deinit();
+    var state = Self.init(gpa, &terminal, &handler, Buffer.fromSlice(gpa, data));
     defer state.deinit();
     state.have_command_line = false;
     try state.buffer.calculateLines();
@@ -818,7 +777,9 @@ test "state goto line" {
     std.mem.copy(u8, data, lit);
 
     var terminal = Terminal{ .size = .{ .width = 10, .height = 5 } };
-    var state = Self.init(gpa, &terminal, Buffer.fromSlice(gpa, data));
+    var handler = input.InputHandler.init(gpa);
+    defer handler.deinit();
+    var state = Self.init(gpa, &terminal, &handler, Buffer.fromSlice(gpa, data));
     defer state.deinit();
     state.have_command_line = false;
     try state.buffer.calculateLines();
@@ -839,7 +800,9 @@ test "state clamp line end" {
     std.mem.copy(u8, data, lit);
 
     var terminal = Terminal{ .size = .{ .width = 100, .height = 3 } };
-    var state = Self.init(gpa, &terminal, Buffer.fromSlice(gpa, data));
+    var handler = input.InputHandler.init(gpa);
+    defer handler.deinit();
+    var state = Self.init(gpa, &terminal, &handler, Buffer.fromSlice(gpa, data));
     defer state.deinit();
     state.have_command_line = false;
     try state.buffer.calculateLines();
@@ -879,7 +842,9 @@ test "state page up/down" {
     std.mem.copy(u8, data, lit);
 
     var terminal = Terminal{ .size = .{ .width = 10, .height = 5 } };
-    var state = Self.init(gpa, &terminal, Buffer.fromSlice(gpa, data));
+    var handler = input.InputHandler.init(gpa);
+    defer handler.deinit();
+    var state = Self.init(gpa, &terminal, &handler, Buffer.fromSlice(gpa, data));
     defer state.deinit();
     state.have_command_line = false;
     try state.buffer.calculateLines();
@@ -924,7 +889,9 @@ test "state viewport up/down" {
     std.mem.copy(u8, data, lit);
 
     var terminal = Terminal{ .size = .{ .width = 100, .height = 5 } };
-    var state = Self.init(gpa, &terminal, Buffer.fromSlice(gpa, data));
+    var handler = input.InputHandler.init(gpa);
+    defer handler.deinit();
+    var state = Self.init(gpa, &terminal, &handler, Buffer.fromSlice(gpa, data));
     defer state.deinit();
     state.have_command_line = false;
     try state.buffer.calculateLines();
@@ -978,7 +945,9 @@ test "state viewport line to top/bottom/centre" {
     std.mem.copy(u8, data, lit);
 
     var terminal = Terminal{ .size = .{ .width = 100, .height = 5 } };
-    var state = Self.init(gpa, &terminal, Buffer.fromSlice(gpa, data));
+    var handler = input.InputHandler.init(gpa);
+    defer handler.deinit();
+    var state = Self.init(gpa, &terminal, &handler, Buffer.fromSlice(gpa, data));
     defer state.deinit();
     state.have_command_line = false;
     try state.buffer.calculateLines();
@@ -1036,7 +1005,9 @@ test "state can't scroll past last line" {
     std.mem.copy(u8, data, lit);
 
     var terminal = Terminal{ .size = .{ .width = 10, .height = 5 } };
-    var state = Self.init(gpa, &terminal, Buffer.fromSlice(gpa, data));
+    var handler = input.InputHandler.init(gpa);
+    defer handler.deinit();
+    var state = Self.init(gpa, &terminal, &handler, Buffer.fromSlice(gpa, data));
     defer state.deinit();
     state.have_command_line = false;
     try state.buffer.calculateLines();
@@ -1066,23 +1037,25 @@ test "search multiple one line" {
     std.mem.copy(u8, data, lit);
 
     var terminal = Terminal{ .size = .{ .width = 10, .height = 5 } };
-    var state = Self.init(gpa, &terminal, Buffer.fromSlice(gpa, data));
+    var handler = input.InputHandler.init(gpa);
+    defer handler.deinit();
+    var state = Self.init(gpa, &terminal, &handler, Buffer.fromSlice(gpa, data));
     defer state.deinit();
     state.have_command_line = false;
     try state.buffer.calculateLines();
 
     for ("/re\r") |c| {
-        try state.handleInput(c);
+        try state.handleInput(&((try handler.handleInput(c)) orelse unreachable));
     }
     try std.testing.expectEqual(ds.Position{ .x = 6, .y = 0 }, state.cursor.pos);
 
-    try state.handleInput('n');
+    try state.handleInput(&((try handler.handleInput('n')) orelse unreachable));
     try std.testing.expectEqual(ds.Position{ .x = 20, .y = 0 }, state.cursor.pos);
 
-    try state.handleInput('n');
+    try state.handleInput(&((try handler.handleInput('n')) orelse unreachable));
     try std.testing.expectEqual(ds.Position{ .x = 36, .y = 4 }, state.cursor.pos);
 
-    try state.handleInput('n');
+    try state.handleInput(&((try handler.handleInput('n')) orelse unreachable));
     try std.testing.expectEqual(ds.Position{ .x = 78, .y = 4 }, state.cursor.pos);
 }
 
@@ -1096,13 +1069,15 @@ test "end of blank line then letter" {
     std.mem.copy(u8, data, lit);
 
     var terminal = Terminal{ .size = .{ .width = 10, .height = 5 } };
-    var state = Self.init(gpa, &terminal, Buffer.fromSlice(gpa, data));
+    var handler = input.InputHandler.init(gpa);
+    defer handler.deinit();
+    var state = Self.init(gpa, &terminal, &handler, Buffer.fromSlice(gpa, data));
     defer state.deinit();
     state.have_command_line = false;
     try state.buffer.calculateLines();
 
     for ("Ao") |c| {
-        try state.handleInput(c);
+        try state.handleInput(&((try handler.handleInput(c)) orelse unreachable));
     }
     try std.testing.expectEqualStrings("o\nhello", state.buffer.data.items);
 }
@@ -1120,7 +1095,9 @@ test "backspace at top of viewport" {
     std.mem.copy(u8, data, lit);
 
     var terminal = Terminal{ .size = .{ .width = 10, .height = 2 } };
-    var state = Self.init(gpa, &terminal, Buffer.fromSlice(gpa, data));
+    var handler = input.InputHandler.init(gpa);
+    defer handler.deinit();
+    var state = Self.init(gpa, &terminal, &handler, Buffer.fromSlice(gpa, data));
     defer state.deinit();
     state.have_command_line = false;
     try state.buffer.calculateLines();
@@ -1132,7 +1109,7 @@ test "backspace at top of viewport" {
     try std.testing.expectEqual(ds.Position{ .x = 0, .y = 3 }, state.offset);
 
     for ([_]u8{ 'i', 127 }) |c| {
-        try state.handleInput(c);
+        try state.handleInput(&((try handler.handleInput(c)) orelse unreachable));
     }
 
     try std.testing.expectEqual(ds.Position{ .x = 3, .y = 0 }, state.cursor.pos);
@@ -1149,7 +1126,9 @@ test "autoindent" {
     std.mem.copy(u8, data, lit);
 
     var terminal = Terminal{ .size = .{ .width = 10, .height = 5 } };
-    var state = Self.init(gpa, &terminal, Buffer.fromSlice(gpa, data));
+    var handler = input.InputHandler.init(gpa);
+    defer handler.deinit();
+    var state = Self.init(gpa, &terminal, &handler, Buffer.fromSlice(gpa, data));
     defer state.deinit();
     state.have_command_line = false;
     try state.buffer.calculateLines();
@@ -1157,18 +1136,18 @@ test "autoindent" {
     state.move(.down, .{});
 
     for ("O1") |c| {
-        try state.handleInput(c);
+        try state.handleInput(&((try handler.handleInput(c)) orelse unreachable));
     }
     try std.testing.expectEqualStrings("  hello\n  1\n  world", state.buffer.data.items);
 
-    try state.handleInput('\x1b');
+    try state.handleInput(&((try handler.handleInput('\x1b')) orelse unreachable));
     for ("o2") |c| {
-        try state.handleInput(c);
+        try state.handleInput(&((try handler.handleInput(c)) orelse unreachable));
     }
     try std.testing.expectEqualStrings("  hello\n  1\n  2\n  world", state.buffer.data.items);
 
     for ("\r3") |c| {
-        try state.handleInput(c);
+        try state.handleInput(&((try handler.handleInput(c)) orelse unreachable));
     }
     try std.testing.expectEqualStrings("  hello\n  1\n  2\n  3\n  world", state.buffer.data.items);
 }

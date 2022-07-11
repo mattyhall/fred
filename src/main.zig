@@ -1,4 +1,5 @@
 const std = @import("std");
+const Fred = @import("Fred.zig");
 const Terminal = @import("Terminal.zig");
 const Buffer = @import("Buffer.zig");
 const input = @import("input.zig");
@@ -46,9 +47,10 @@ pub fn main() anyerror!void {
     var allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    var state = State.init(allocator, terminal, try Buffer.fromFile(allocator, path));
-    defer state.deinit();
-    try state.buffer.calculateLines();
+    var fred = Fred.init(allocator, terminal);
+    defer fred.deinit();
+
+    try fred.addBuffer(State.init(allocator, terminal, &fred.input_handler, try Buffer.fromFile(allocator, path)));
 
     while (true) {
         var poll_fds = [_]std.os.pollfd{
@@ -62,10 +64,10 @@ pub fn main() anyerror!void {
         if (poll_fds[0].revents & std.os.POLL.IN != 0) {
             const inp = terminal.getInput();
             for (inp) |ch| {
-                try state.handleInput(ch);
+                try fred.handleInput(ch);
             }
 
-            try state.draw(writer);
+            try fred.draw(writer);
             try stdout.flush();
         }
 
@@ -73,7 +75,7 @@ pub fn main() anyerror!void {
         if (poll_fds[1].revents & (std.os.POLL.IN) != 0) {
             _ = try std.os.read(terminal.fd, &proc_buf);
 
-            try state.draw(writer);
+            try fred.draw(writer);
             try stdout.flush();
         }
     }
