@@ -5,6 +5,7 @@ gpa: std.mem.Allocator,
 data: std.ArrayListUnmanaged(u8),
 lines: std.ArrayListUnmanaged(u32),
 path: ?[]const u8 = null,
+dirty: bool = false,
 
 const Self = @This();
 
@@ -53,11 +54,12 @@ pub fn fromSlice(allocator: std.mem.Allocator, data: []u8) Self {
     };
 }
 
-pub fn save(self: *const Self) !void {
+pub fn save(self: *Self) !void {
     const p = self.path orelse return error.no_path;
     var f = try openFile(p);
     defer f.close();
     try f.writeAll(self.data.items);
+    self.dirty = false;
 }
 
 pub fn calculateLines(self: *Self) !void {
@@ -88,6 +90,27 @@ pub fn lineSpan(self: *const Self, line: u32) ds.Span {
 
     return .{ .start = line_start, .end = line_end };
 }
+
+fn change(self: *Self) !void {
+    self.dirty = true;
+    try self.calculateLines();
+}
+
+pub fn orderedRemove(self: *Self, index: usize) !void {
+    _ = self.data.orderedRemove(index);
+    try self.change();
+}
+
+pub fn insert(self: *Self, index: usize, ch: u8) !void {
+    try self.data.insert(self.gpa, index, ch);
+    try self.change();
+}
+
+pub fn insertSlice(self: *Self, index: usize, s: []const u8) !void {
+    try self.data.insertSlice(self.gpa, index, s);
+    try self.change();
+}
+
 pub fn deinit(self: *Self) void {
     self.data.deinit(self.gpa);
     self.lines.deinit(self.gpa);
@@ -114,4 +137,3 @@ test "buffer line iterator" {
     try std.testing.expectEqualStrings("today", iter.next().?);
     try std.testing.expectEqual(@as(?[]u8, null), iter.next());
 }
-

@@ -217,22 +217,19 @@ pub fn handleInput(self: *Self, ch: u8) !void {
                 switch (c) {
                     127 => { // BACKSPACE
                         if (index == 0) return;
-                        _ = self.buffer.data.orderedRemove(index - 1);
-                        try self.buffer.calculateLines();
+                        try self.buffer.orderedRemove(index - 1);
                         try self.refindMatches();
                         self.putCursorAtIndex(index - 1);
                     },
                     13 => { // RET
-                        try self.buffer.data.insert(self.buffer.gpa, index, '\n');
-                        try self.buffer.calculateLines();
+                        try self.buffer.insert(index, '\n');
                         self.move(.down, .{});
                         self.move(.goto_line_start, .{});
                         try self.copyWhitespaceFromAbove();
                         try self.refindMatches();
                     },
                     else => {
-                        try self.buffer.data.insert(self.buffer.gpa, index, c);
-                        try self.buffer.calculateLines();
+                        try self.buffer.insert(index, c);
                         try self.refindMatches();
                         self.move(.right, .{ .allow_past_last_column = true });
                     },
@@ -255,8 +252,7 @@ fn copyWhitespaceFromAbove(self: *Self) !void {
     }
     if (index) |idx| {
         const buffer_index = self.bufferIndex();
-        try self.buffer.data.insertSlice(self.buffer.gpa, buffer_index, line_above[0 .. idx + 1]);
-        try self.buffer.calculateLines();
+        try self.buffer.insertSlice(buffer_index, line_above[0 .. idx + 1]);
         try self.refindMatches();
         self.move(.goto_line_end_plus_one, .{});
     }
@@ -559,14 +555,16 @@ fn drawStatusLine(self: *const Self, writer: anytype) !void {
 
     const path = self.buffer.path orelse @as([]const u8, std.mem.sliceTo("scratch", 0));
 
-    const len = path.len + 1 + pos_s.len + 1 + pc_s.len;
+    const modified = if (self.buffer.dirty) "[+]" else "";
+
+    const len = path.len + modified.len + 1 + pos_s.len + 1 + pc_s.len;
 
     _ = try writer.print("\x1b[{};{}H", .{
         self.terminal_size.height,
         self.terminal_size.width - len - 1,
     });
 
-    try (Style{ .foreground = Style.green }).print(writer, "{s} ", .{path});
+    try (Style{ .foreground = Style.green }).print(writer, "{s}{s} ", .{path, modified});
     try (Style{ .foreground = Style.blue }).print(writer, "{s} ", .{pos_s});
     try (Style{ .foreground = Style.blue }).print(writer, "{s}", .{pc_s});
 }
