@@ -50,7 +50,7 @@ pub fn main() anyerror!void {
     var fred = Fred.init(allocator, terminal);
     defer fred.deinit();
 
-    try fred.addBuffer(State.init(allocator, terminal, &fred.input_handler, try Buffer.fromFile(allocator, path)));
+    try fred.addBuffer(State.init(allocator, &terminal.size, &fred.input_handler, try Buffer.fromFile(allocator, path)));
 
     while (true) {
         var poll_fds = [_]std.os.pollfd{

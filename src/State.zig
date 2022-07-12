@@ -31,10 +31,10 @@ fn startOfWord(previous: u8, current: u8) bool {
     return (c_alpha and (p_space or !p_alpha)) or (!c_alpha and (p_space or p_alpha));
 }
 
-pub fn init(gpa: std.mem.Allocator, terminal: *const Terminal, input_handler: *input.InputHandler, buffer: Buffer) Self {
+pub fn init(gpa: std.mem.Allocator, terminal_size: *const Terminal.Size, input_handler: *input.InputHandler, buffer: Buffer) Self {
     return .{
         .gpa = gpa,
-        .terminal_size = &terminal.size,
+        .terminal_size = terminal_size,
         .buffer = buffer,
         .input_handler = input_handler,
         .search_highlights = .{},

@@ -42,7 +42,7 @@ pub fn fromFile(allocator: std.mem.Allocator, path: []const u8) !Self {
 
     var data = try f.readToEndAlloc(allocator, 2 * 1024 * 1024);
     var self = fromSlice(allocator, data);
-    self.path = path;
+    self.path = try self.gpa.dupe(u8, path);
     return self;
 }
 
@@ -114,6 +114,7 @@ pub fn insertSlice(self: *Self, index: usize, s: []const u8) !void {
 pub fn deinit(self: *Self) void {
     self.data.deinit(self.gpa);
     self.lines.deinit(self.gpa);
+    if (self.path) |p| self.gpa.free(p);
 }
 
 test "buffer line iterator" {

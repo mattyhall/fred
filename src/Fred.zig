@@ -1,4 +1,5 @@
 const std = @import("std");
+const Buffer = @import("Buffer.zig");
 const State = @import("State.zig");
 const Style = @import("Style.zig");
 const Terminal = @import("Terminal.zig");
@@ -10,7 +11,7 @@ gpa: std.mem.Allocator,
 
 terminal_size: *const Terminal.Size,
 
-current_buffer: u32,
+current_buffer: usize,
 buffers: std.ArrayListUnmanaged(State),
 
 input_handler: input.InputHandler,
@@ -40,6 +41,13 @@ pub fn handleInput(self: *Self, ch: u8) !void {
         .command => |al| {
             if (std.mem.eql(u8, "q", al.items)) std.os.exit(0);
             if (std.mem.eql(u8, "w", al.items)) try self.current().buffer.save();
+            if (std.mem.eql(u8, "b", al.items)) self.current_buffer = (self.current_buffer + 1) % self.buffers.items.len;
+            if (std.mem.startsWith(u8, al.items, "e") and al.items.len > 2) {
+                const p = al.items[2..];
+                const buf = try Buffer.fromFile(self.gpa, p);
+                try self.addBuffer(State.init(self.gpa, self.terminal_size, &self.input_handler, buf));
+                self.current_buffer = self.buffers.items.len - 1;
+            }
             al.deinit();
             return;
         },
