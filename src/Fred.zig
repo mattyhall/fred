@@ -58,8 +58,12 @@ pub fn handleInput(self: *Self, ch: u8) !void {
 }
 
 pub fn draw(self: *const Self, writer: anytype) !void {
-    // Clear and go to bottom
+    // Clear
     _ = try writer.write("\x1b[2J");
+
+    try self.current().draw(writer);
+
+    // Goto bottom
     _ = try writer.print("\x1b[{};{}H", .{ self.terminal_size.height, 1 });
 
     // Command
@@ -71,17 +75,21 @@ pub fn draw(self: *const Self, writer: anytype) !void {
         try writer.print(" {s}", .{self.input_handler.cmd.items});
     } else {
         try self.drawStatusLine(writer);
+
+        const line_len = std.math.log10(self.current().buffer.lines.items.len) + 1;
+        _ = try writer.print("\x1b[{};{}H", .{
+            self.current().cursor.pos.y + 1,
+            self.current().cursor.pos.x + line_len + 2 + 1,
+        });
     }
 
-    if (self.input_handler.mode == .insert) {
-        // Bar cursor
-        _ = try writer.write("\x1b[6 q");
-    } else {
+    if (self.input_handler.mode == .normal) {
         // Block cursor
         _ = try writer.write("\x1b[2 q");
+    } else {
+        // Bar cursor
+        _ = try writer.write("\x1b[6 q");
     }
-
-    try self.current().draw(writer);
 }
 
 fn drawStatusLine(self: *const Self, writer: anytype) !void {

@@ -510,11 +510,6 @@ pub fn draw(self: *const Self, writer: anytype) !void {
         }
     }
 
-    // Cursor position
-    _ = try writer.print("\x1b[{};{}H", .{
-        self.cursor.pos.y + 1,
-        self.cursor.pos.x + line_len + 2 + 1,
-    });
 }
 
 pub fn deinit(self: *Self) void {
