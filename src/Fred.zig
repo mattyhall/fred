@@ -16,13 +16,13 @@ buffers: std.ArrayListUnmanaged(State),
 
 input_handler: input.InputHandler,
 
-pub fn init(allocator: std.mem.Allocator, terminal: *const Terminal) Self {
+pub fn init(allocator: std.mem.Allocator, terminal_size: *const Terminal.Size) Self {
     return Self{
         .gpa = allocator,
         .current_buffer = 0,
         .buffers = std.ArrayListUnmanaged(State){},
         .input_handler = input.InputHandler.init(allocator),
-        .terminal_size = &terminal.size,
+        .terminal_size = terminal_size,
     };
 }
 
