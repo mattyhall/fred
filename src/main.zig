@@ -160,20 +160,20 @@ fn runClient(session: []const u8) !void {
     var terminal = try Terminal.init();
 
     {
-        var buf: [16 * 1024]u8 = undefined;
-        var read = try stream.read(&buf);
-        var pkt = buf[0..read];
-        var fbs = std.io.fixedBufferStream(pkt);
-        var reader = fbs.reader();
+        var br = std.io.bufferedReader(stream.reader());
+        var reader = br.reader();
         if ((try reader.readIntBig(u8)) != @enumToInt(Op.print)) {
             stream.close();
             return error.expected_print;
         }
 
         const size = try reader.readIntBig(u32);
-        const pos = try fbs.getPos();
-        var res = pkt[pos .. pos + size];
-        try stdout_writer.writeAll(res);
+        {
+            var i: u16 = 0;
+            while (i < size) : (i += 1) {
+                try stdout_writer.writeByte(try reader.readByte());
+            }
+        }
         try stdout.flush();
     }
 
