@@ -509,7 +509,6 @@ pub fn draw(self: *const Self, writer: anytype) !void {
             i += 1;
         }
     }
-
 }
 
 pub fn deinit(self: *Self) void {

@@ -12,7 +12,7 @@ server: std.net.StreamServer,
 
 pub fn init(gpa: std.mem.Allocator) Self {
     var server = std.net.StreamServer.init(.{});
-    return Self { .gpa = gpa, .server = server };
+    return Self{ .gpa = gpa, .server = server };
 }
 
 pub fn handle(self: *Self, fred: *Fred, conn: std.net.StreamServer.Connection) !void {
@@ -71,7 +71,6 @@ pub fn listen(self: *Self, session: []const u8) !void {
     defer self.gpa.free(path);
 
     std.os.unlink(path) catch {};
-
 
     try self.server.listen(try std.net.Address.initUnix(path));
 

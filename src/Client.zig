@@ -8,11 +8,11 @@ const Self = @This();
 gpa: std.mem.Allocator,
 
 pub fn init(gpa: std.mem.Allocator) Self {
-    return Self{.gpa = gpa};
+    return Self{ .gpa = gpa };
 }
 
 pub fn run(self: *Self, session: []const u8, path: []const u8) !void {
-    var uds_path = try std.fs.path.join(self.gpa, &.{"/tmp/fred", session});
+    var uds_path = try std.fs.path.join(self.gpa, &.{ "/tmp/fred", session });
     defer self.gpa.free(uds_path);
 
     var stream: std.net.Stream = undefined;
