@@ -9,10 +9,11 @@ const Self = @This();
 
 gpa: std.mem.Allocator,
 server: std.net.StreamServer,
+size: Terminal.Size,
 
 pub fn init(gpa: std.mem.Allocator) Self {
     var server = std.net.StreamServer.init(.{});
-    return Self{ .gpa = gpa, .server = server };
+    return Self{ .gpa = gpa, .server = server, .size = .{ .width = 80, .height = 80} };
 }
 
 pub fn handle(self: *Self, fred: *Fred, conn: std.net.StreamServer.Connection) !void {
@@ -29,8 +30,8 @@ pub fn handle(self: *Self, fred: *Fred, conn: std.net.StreamServer.Connection) !
         return error.invalid_op;
     }
 
-    _ = try reader.readIntBig(u8); // width
-    _ = try reader.readIntBig(u8); // height
+    self.size.width = try reader.readIntBig(u16);
+    self.size.height = try reader.readIntBig(u16);
 
     const path_len = try reader.readIntBig(u16);
     var path = try self.gpa.alloc(u8, path_len);
@@ -42,9 +43,7 @@ pub fn handle(self: *Self, fred: *Fred, conn: std.net.StreamServer.Connection) !
         return error.path_too_short;
     }
 
-    const terminal_size = Terminal.Size{ .width = 80, .height = 80 };
-
-    try fred.addBuffer(State.init(self.gpa, &terminal_size, &fred.input_handler, try Buffer.fromFile(self.gpa, path)));
+    try fred.addBuffer(State.init(self.gpa, &self.size, &fred.input_handler, try Buffer.fromFile(self.gpa, path)));
 
     var al = std.ArrayList(u8).init(self.gpa);
     try fred.draw(al.writer());
@@ -74,8 +73,7 @@ pub fn listen(self: *Self, session: []const u8) !void {
 
     try self.server.listen(try std.net.Address.initUnix(path));
 
-    var size = Terminal.Size{ .width = 80, .height = 80 };
-    var fred = Fred.init(self.gpa, &size);
+    var fred = Fred.init(self.gpa, &self.size);
     defer fred.deinit();
 
     while (true) {

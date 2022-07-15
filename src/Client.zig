@@ -24,14 +24,16 @@ pub fn run(self: *Self, session: []const u8, path: []const u8) !void {
         break;
     }
 
+    var terminal = try Terminal.init();
+
     {
         var al = std.ArrayList(u8).init(self.gpa);
         defer al.deinit();
 
         var writer = al.writer();
         try writer.writeIntBig(u8, @enumToInt(msg.Op.hello));
-        try writer.writeIntBig(u8, 80); // width
-        try writer.writeIntBig(u8, 80); // height
+        try writer.writeIntBig(u16, @intCast(u16, terminal.size.width));
+        try writer.writeIntBig(u16, @intCast(u16, terminal.size.height));
         try writer.writeIntBig(u16, @intCast(u16, path.len));
         try writer.writeAll(path);
 
@@ -40,8 +42,6 @@ pub fn run(self: *Self, session: []const u8, path: []const u8) !void {
 
     var stdout = std.io.bufferedWriter(std.io.getStdOut().writer());
     var stdout_writer = stdout.writer();
-
-    var terminal = try Terminal.init();
 
     {
         var br = std.io.bufferedReader(stream.reader());
