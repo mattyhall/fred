@@ -22,7 +22,7 @@ pub fn init(gpa: std.mem.Allocator) Self {
     };
 }
 
-pub fn handle(self: *Self, conn: std.net.StreamServer.Connection) !void {
+pub fn handle(self: *Self, view: *View, conn: std.net.StreamServer.Connection) !void {
     std.log.debug("got connection", .{});
 
     var br = std.io.bufferedReader(conn.stream.reader());
@@ -34,8 +34,8 @@ pub fn handle(self: *Self, conn: std.net.StreamServer.Connection) !void {
         return error.invalid_op;
     }
 
-    const width = try reader.readIntBig(u16);
-    const height = try reader.readIntBig(u16);
+    view.size.width = try reader.readIntBig(u16);
+    view.size.height = try reader.readIntBig(u16);
 
     const path_len = try reader.readIntBig(u16);
     var path = try self.gpa.alloc(u8, path_len);
@@ -47,7 +47,7 @@ pub fn handle(self: *Self, conn: std.net.StreamServer.Connection) !void {
         return error.path_too_short;
     }
 
-    std.log.debug("read hello {}x{}", .{ width, height });
+    std.log.debug("read hello {}x{}", .{ view.size.width, view.size.height });
 
     var buf = b: {
         var node = self.buffers.first;
@@ -66,14 +66,6 @@ pub fn handle(self: *Self, conn: std.net.StreamServer.Connection) !void {
         break :b &new_node.data;
     };
 
-    var node = try self.gpa.create(@TypeOf(self.views).Node);
-    defer self.gpa.destroy(node);
-
-    node.data = View.init(self.gpa, width, height);
-    self.views.prepend(node);
-    defer self.views.remove(node);
-
-    var view = &node.data;
     try view.addBuffer(buf);
 
     var bw = std.io.bufferedWriter(conn.stream.writer());
@@ -125,6 +117,25 @@ fn read(self: *Self, reader: anytype, writer: anytype, view: *View) !void {
     }
 }
 
+fn connectionThreadMain(server: *Self, conn: std.net.StreamServer.Connection) void {
+    var node = server.gpa.create(@TypeOf(server.views).Node) catch |err| {
+        std.log.warn("got error whilst creating node {}", .{err});
+        return;
+    };
+    defer server.gpa.destroy(node);
+
+    node.data = View.init(server.gpa);
+    server.views.prepend(node);
+
+    defer server.views.remove(node);
+
+    var view = &node.data;
+
+    server.handle(view, conn) catch |err| {
+        std.log.warn("got error whilst handling conn: {}", .{err});
+    };
+}
+
 pub fn listen(self: *Self, session: []const u8) !void {
     std.os.mkdir("/tmp/fred/", 0o777) catch |err| switch (err) {
         error.PathAlreadyExists => {},
@@ -140,9 +151,9 @@ pub fn listen(self: *Self, session: []const u8) !void {
 
     while (true) {
         var conn = try self.server.accept();
-        self.handle(conn) catch |err| {
-            std.log.warn("got error whilst handling conn: {}", .{err});
-        };
+
+        var thread = try std.Thread.spawn(.{}, connectionThreadMain, .{self, conn});
+        thread.detach();
     }
 }
 

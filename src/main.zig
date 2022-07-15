@@ -52,7 +52,7 @@ pub fn main() anyerror!void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){ .backing_allocator = std.heap.c_allocator };
     defer _ = gpa.deinit();
 
-    if (std.os.argv.len == 3) {
+    if (std.os.argv.len == 4) {
         if (!std.mem.eql(u8, "-s", std.mem.span(std.os.argv[1]))) {
             _ = try writer.write("only recognised argument is -s");
             try stdout.flush();
@@ -64,7 +64,7 @@ pub fn main() anyerror!void {
         var client = Client.init(gpa.allocator());
         defer client.deinit();
 
-        client.run(std.mem.span(std.os.argv[1]), std.mem.span(std.os.argv[2])) catch |err| {
+        client.run(std.mem.span(std.os.argv[2]), std.mem.span(std.os.argv[3])) catch |err| {
             std.log.err("got error: {}", .{err});
             return err;
         };
