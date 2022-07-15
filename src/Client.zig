@@ -73,7 +73,6 @@ pub fn run(self: *Self, session: []const u8, path: []const u8) !void {
         if (poll_fds[0].revents & std.os.POLL.IN != 0) {
             const inp = self.terminal.getInput();
             std.log.debug("terminal input {s}", .{inp});
-            if (inp[0] == 'q') return;
 
             try self.sendInput(inp);
         }
@@ -87,9 +86,14 @@ pub fn run(self: *Self, session: []const u8, path: []const u8) !void {
 
         if ((poll_fds[2].revents & std.os.POLL.IN != 0) or br.fifo.readableLength() > 0) {
             std.log.debug("stream readable", .{});
-            try self.read(reader, stdout_writer);
+            self.read(reader, stdout_writer) catch |err| {
+                switch (err) {
+                    error.EndOfStream => return,
+                    else => return err,
+                }
+            };
             try stdout.flush();
-       }
+        }
     }
 }
 

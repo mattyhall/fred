@@ -14,7 +14,9 @@ offset: ds.Position = .{ .x = 0, .y = 0 },
 gpa: std.mem.Allocator,
 
 terminal_size: *const Terminal.Size,
-buffer: Buffer,
+buffer: *Buffer,
+
+// TODO: remove, make search instructions pass the search
 input_handler: *input.InputHandler,
 
 current_search: ?std.ArrayList(u8) = null,
@@ -31,7 +33,7 @@ fn startOfWord(previous: u8, current: u8) bool {
     return (c_alpha and (p_space or !p_alpha)) or (!c_alpha and (p_space or p_alpha));
 }
 
-pub fn init(gpa: std.mem.Allocator, terminal_size: *const Terminal.Size, input_handler: *input.InputHandler, buffer: Buffer) Self {
+pub fn init(gpa: std.mem.Allocator, terminal_size: *const Terminal.Size, input_handler: *input.InputHandler, buffer: *Buffer) Self {
     return .{
         .gpa = gpa,
         .terminal_size = terminal_size,
@@ -512,7 +514,6 @@ pub fn draw(self: *const Self, writer: anytype) !void {
 }
 
 pub fn deinit(self: *Self) void {
-    self.buffer.deinit();
     if (self.current_search) |s| s.deinit();
     if (self.matches) |m| m.deinit();
     self.search_highlights.deinit(self.gpa);
@@ -530,8 +531,13 @@ test "state word movement" {
     const terminal = Terminal{ .size = .{ .width = 50, .height = 6 } };
     var handler = input.InputHandler.init(gpa);
     defer handler.deinit();
-    var state = Self.init(gpa, &terminal.size, &handler, Buffer.fromSlice(gpa, data));
+
+    var buffer = Buffer.fromSlice(gpa, data);
+    defer buffer.deinit();
+
+    var state = Self.init(gpa, &terminal.size, &handler, &buffer);
     defer state.deinit();
+
     state.have_command_line = false;
     try state.buffer.calculateLines();
 
@@ -571,8 +577,13 @@ test "state word movement blank line" {
     const terminal = Terminal{ .size = .{ .width = 50, .height = 6 } };
     var handler = input.InputHandler.init(gpa);
     defer handler.deinit();
-    var state = Self.init(gpa, &terminal.size, &handler, Buffer.fromSlice(gpa, data));
+
+    var buffer = Buffer.fromSlice(gpa, data);
+    defer buffer.deinit();
+
+    var state = Self.init(gpa, &terminal.size, &handler, &buffer);
     defer state.deinit();
+
     state.have_command_line = false;
     try state.buffer.calculateLines();
 
@@ -605,8 +616,13 @@ test "state viewport" {
     const terminal = Terminal{ .size = .{ .width = 6, .height = 3 } };
     var handler = input.InputHandler.init(gpa);
     defer handler.deinit();
-    var state = Self.init(gpa, &terminal.size, &handler, Buffer.fromSlice(gpa, data));
+
+    var buffer = Buffer.fromSlice(gpa, data);
+    defer buffer.deinit();
+
+    var state = Self.init(gpa, &terminal.size, &handler, &buffer);
     defer state.deinit();
+
     state.have_command_line = false;
     try state.buffer.calculateLines();
 
@@ -664,8 +680,13 @@ test "state goto top/bottom" {
     var terminal = Terminal{ .size = .{ .width = 10, .height = 5 } };
     var handler = input.InputHandler.init(gpa);
     defer handler.deinit();
-    var state = Self.init(gpa, &terminal.size, &handler, Buffer.fromSlice(gpa, data));
+
+    var buffer = Buffer.fromSlice(gpa, data);
+    defer buffer.deinit();
+
+    var state = Self.init(gpa, &terminal.size, &handler, &buffer);
     defer state.deinit();
+
     state.have_command_line = false;
     try state.buffer.calculateLines();
 
@@ -698,8 +719,13 @@ test "state goto start/end of line" {
     var terminal = Terminal{ .size = .{ .width = 100, .height = 2 } };
     var handler = input.InputHandler.init(gpa);
     defer handler.deinit();
-    var state = Self.init(gpa, &terminal.size, &handler, Buffer.fromSlice(gpa, data));
+
+    var buffer = Buffer.fromSlice(gpa, data);
+    defer buffer.deinit();
+
+    var state = Self.init(gpa, &terminal.size, &handler, &buffer);
     defer state.deinit();
+
     state.have_command_line = false;
     try state.buffer.calculateLines();
 
@@ -734,8 +760,13 @@ test "state goto start of line skip whitespace" {
     var terminal = Terminal{ .size = .{ .width = 100, .height = 2 } };
     var handler = input.InputHandler.init(gpa);
     defer handler.deinit();
-    var state = Self.init(gpa, &terminal.size, &handler, Buffer.fromSlice(gpa, data));
+
+    var buffer = Buffer.fromSlice(gpa, data);
+    defer buffer.deinit();
+
+    var state = Self.init(gpa, &terminal.size, &handler, &buffer);
     defer state.deinit();
+
     state.have_command_line = false;
     try state.buffer.calculateLines();
 
@@ -773,8 +804,13 @@ test "state goto line" {
     var terminal = Terminal{ .size = .{ .width = 10, .height = 5 } };
     var handler = input.InputHandler.init(gpa);
     defer handler.deinit();
-    var state = Self.init(gpa, &terminal.size, &handler, Buffer.fromSlice(gpa, data));
+
+    var buffer = Buffer.fromSlice(gpa, data);
+    defer buffer.deinit();
+
+    var state = Self.init(gpa, &terminal.size, &handler, &buffer);
     defer state.deinit();
+
     state.have_command_line = false;
     try state.buffer.calculateLines();
 
@@ -796,8 +832,13 @@ test "state clamp line end" {
     var terminal = Terminal{ .size = .{ .width = 100, .height = 3 } };
     var handler = input.InputHandler.init(gpa);
     defer handler.deinit();
-    var state = Self.init(gpa, &terminal.size, &handler, Buffer.fromSlice(gpa, data));
+
+    var buffer = Buffer.fromSlice(gpa, data);
+    defer buffer.deinit();
+
+    var state = Self.init(gpa, &terminal.size, &handler, &buffer);
     defer state.deinit();
+
     state.have_command_line = false;
     try state.buffer.calculateLines();
 
@@ -838,8 +879,13 @@ test "state page up/down" {
     var terminal = Terminal{ .size = .{ .width = 10, .height = 5 } };
     var handler = input.InputHandler.init(gpa);
     defer handler.deinit();
-    var state = Self.init(gpa, &terminal.size, &handler, Buffer.fromSlice(gpa, data));
+
+    var buffer = Buffer.fromSlice(gpa, data);
+    defer buffer.deinit();
+
+    var state = Self.init(gpa, &terminal.size, &handler, &buffer);
     defer state.deinit();
+
     state.have_command_line = false;
     try state.buffer.calculateLines();
 
@@ -885,8 +931,13 @@ test "state viewport up/down" {
     var terminal = Terminal{ .size = .{ .width = 100, .height = 5 } };
     var handler = input.InputHandler.init(gpa);
     defer handler.deinit();
-    var state = Self.init(gpa, &terminal.size, &handler, Buffer.fromSlice(gpa, data));
+
+    var buffer = Buffer.fromSlice(gpa, data);
+    defer buffer.deinit();
+
+    var state = Self.init(gpa, &terminal.size, &handler, &buffer);
     defer state.deinit();
+
     state.have_command_line = false;
     try state.buffer.calculateLines();
 
@@ -941,8 +992,13 @@ test "state viewport line to top/bottom/centre" {
     var terminal = Terminal{ .size = .{ .width = 100, .height = 5 } };
     var handler = input.InputHandler.init(gpa);
     defer handler.deinit();
-    var state = Self.init(gpa, &terminal.size, &handler, Buffer.fromSlice(gpa, data));
+
+    var buffer = Buffer.fromSlice(gpa, data);
+    defer buffer.deinit();
+
+    var state = Self.init(gpa, &terminal.size, &handler, &buffer);
     defer state.deinit();
+
     state.have_command_line = false;
     try state.buffer.calculateLines();
 
@@ -1001,8 +1057,13 @@ test "state can't scroll past last line" {
     var terminal = Terminal{ .size = .{ .width = 10, .height = 5 } };
     var handler = input.InputHandler.init(gpa);
     defer handler.deinit();
-    var state = Self.init(gpa, &terminal.size, &handler, Buffer.fromSlice(gpa, data));
+
+    var buffer = Buffer.fromSlice(gpa, data);
+    defer buffer.deinit();
+
+    var state = Self.init(gpa, &terminal.size, &handler, &buffer);
     defer state.deinit();
+
     state.have_command_line = false;
     try state.buffer.calculateLines();
 
@@ -1033,8 +1094,13 @@ test "search multiple one line" {
     var terminal = Terminal{ .size = .{ .width = 10, .height = 5 } };
     var handler = input.InputHandler.init(gpa);
     defer handler.deinit();
-    var state = Self.init(gpa, &terminal.size, &handler, Buffer.fromSlice(gpa, data));
+
+    var buffer = Buffer.fromSlice(gpa, data);
+    defer buffer.deinit();
+
+    var state = Self.init(gpa, &terminal.size, &handler, &buffer);
     defer state.deinit();
+
     state.have_command_line = false;
     try state.buffer.calculateLines();
 
@@ -1065,8 +1131,13 @@ test "end of blank line then letter" {
     var terminal = Terminal{ .size = .{ .width = 10, .height = 5 } };
     var handler = input.InputHandler.init(gpa);
     defer handler.deinit();
-    var state = Self.init(gpa, &terminal.size, &handler, Buffer.fromSlice(gpa, data));
+
+    var buffer = Buffer.fromSlice(gpa, data);
+    defer buffer.deinit();
+
+    var state = Self.init(gpa, &terminal.size, &handler, &buffer);
     defer state.deinit();
+
     state.have_command_line = false;
     try state.buffer.calculateLines();
 
@@ -1091,8 +1162,13 @@ test "backspace at top of viewport" {
     var terminal = Terminal{ .size = .{ .width = 10, .height = 2 } };
     var handler = input.InputHandler.init(gpa);
     defer handler.deinit();
-    var state = Self.init(gpa, &terminal.size, &handler, Buffer.fromSlice(gpa, data));
+
+    var buffer = Buffer.fromSlice(gpa, data);
+    defer buffer.deinit();
+
+    var state = Self.init(gpa, &terminal.size, &handler, &buffer);
     defer state.deinit();
+
     state.have_command_line = false;
     try state.buffer.calculateLines();
 
@@ -1122,8 +1198,13 @@ test "autoindent" {
     var terminal = Terminal{ .size = .{ .width = 10, .height = 5 } };
     var handler = input.InputHandler.init(gpa);
     defer handler.deinit();
-    var state = Self.init(gpa, &terminal.size, &handler, Buffer.fromSlice(gpa, data));
+
+    var buffer = Buffer.fromSlice(gpa, data);
+    defer buffer.deinit();
+
+    var state = Self.init(gpa, &terminal.size, &handler, &buffer);
     defer state.deinit();
+
     state.have_command_line = false;
     try state.buffer.calculateLines();
 

@@ -99,8 +99,8 @@ pub fn main() anyerror!void {
     defer client.deinit();
 
     client.run(&id, std.mem.span(std.os.argv[1])) catch |err| {
-            std.log.err("got error: {}", .{err});
-            return err;
+        std.log.err("got error: {}", .{err});
+        return err;
     };
 }
 

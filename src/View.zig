@@ -9,20 +9,20 @@ const Self = @This();
 
 gpa: std.mem.Allocator,
 
-terminal_size: *const Terminal.Size,
+size: Terminal.Size,
 
 current_buffer: usize,
 buffers: std.ArrayListUnmanaged(State),
 
 input_handler: input.InputHandler,
 
-pub fn init(allocator: std.mem.Allocator, terminal_size: *const Terminal.Size) Self {
+pub fn init(allocator: std.mem.Allocator, width: u16, height: u16) Self {
     return Self{
         .gpa = allocator,
         .current_buffer = 0,
         .buffers = std.ArrayListUnmanaged(State){},
         .input_handler = input.InputHandler.init(allocator),
-        .terminal_size = terminal_size,
+        .size = .{ .width = width, .height = height },
     };
 }
 
@@ -30,8 +30,8 @@ fn current(self: *const Self) *State {
     return &self.buffers.items[self.current_buffer];
 }
 
-pub fn addBuffer(self: *Self, state: State) !void {
-    try self.buffers.append(self.gpa, state);
+pub fn addBuffer(self: *Self, buffer: *Buffer) !void {
+    try self.buffers.append(self.gpa, State.init(self.gpa, &self.size, &self.input_handler, buffer));
     try self.buffers.items[self.buffers.items.len - 1].buffer.calculateLines();
 }
 
@@ -41,13 +41,16 @@ pub fn handleInput(self: *Self, ch: u8) !void {
         .command => |al| {
             if (std.mem.eql(u8, "q", al.items)) std.os.exit(0);
             if (std.mem.eql(u8, "w", al.items)) try self.current().buffer.save();
-            if (std.mem.eql(u8, "b", al.items)) self.current_buffer = (self.current_buffer + 1) % self.buffers.items.len;
-            if (std.mem.startsWith(u8, al.items, "e") and al.items.len > 2) {
-                const p = al.items[2..];
-                const buf = try Buffer.fromFile(self.gpa, p);
-                try self.addBuffer(State.init(self.gpa, self.terminal_size, &self.input_handler, buf));
-                self.current_buffer = self.buffers.items.len - 1;
-            }
+
+            // if (std.mem.eql(u8, "b", al.items)) self.current_buffer = (self.current_buffer + 1) % self.buffers.items.len;
+
+            //             if (std.mem.startsWith(u8, al.items, "e") and al.items.len > 2) {
+            //                 const p = al.items[2..];
+            //                 const buf = try Buffer.fromFile(self.gpa, p);
+            //                 try self.addBuffer(State.init(self.gpa, self.size, &self.input_handler, buf));
+            //                 self.current_buffer = self.buffers.items.len - 1;
+            //             }
+
             al.deinit();
             return;
         },
@@ -58,13 +61,15 @@ pub fn handleInput(self: *Self, ch: u8) !void {
 }
 
 pub fn draw(self: *const Self, writer: anytype) !void {
+    std.log.debug("size: {any}", .{self.size});
+
     // Clear
     _ = try writer.write("\x1b[2J");
 
     try self.current().draw(writer);
 
     // Goto bottom
-    _ = try writer.print("\x1b[{};{}H", .{ self.terminal_size.height, 1 });
+    _ = try writer.print("\x1b[{};{}H", .{ self.size.height, 1 });
 
     // Command
     if (self.input_handler.mode == .command) {
@@ -111,8 +116,8 @@ fn drawStatusLine(self: *const Self, writer: anytype) !void {
     const len = path.len + modified.len + 1 + pos_s.len + 1 + pc_s.len;
 
     _ = try writer.print("\x1b[{};{}H", .{
-        self.terminal_size.height,
-        self.terminal_size.width - len - 1,
+        self.size.height,
+        self.size.width - len - 1,
     });
 
     try (Style{ .foreground = Style.green }).print(writer, "{s}{s} ", .{ path, modified });

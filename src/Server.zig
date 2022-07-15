@@ -1,5 +1,5 @@
 const std = @import("std");
-const Fred = @import("Fred.zig");
+const View = @import("View.zig");
 const Terminal = @import("Terminal.zig");
 const Buffer = @import("Buffer.zig");
 const State = @import("State.zig");
@@ -9,14 +9,20 @@ const Self = @This();
 
 gpa: std.mem.Allocator,
 server: std.net.StreamServer,
-size: Terminal.Size,
+buffers: std.SinglyLinkedList(Buffer),
+views: std.SinglyLinkedList(View),
 
 pub fn init(gpa: std.mem.Allocator) Self {
     var server = std.net.StreamServer.init(.{});
-    return Self{ .gpa = gpa, .server = server, .size = .{ .width = 80, .height = 80 } };
+    return Self{
+        .gpa = gpa,
+        .server = server,
+        .buffers = std.SinglyLinkedList(Buffer){},
+        .views = std.SinglyLinkedList(View){},
+    };
 }
 
-pub fn handle(self: *Self, fred: *Fred, conn: std.net.StreamServer.Connection) !void {
+pub fn handle(self: *Self, conn: std.net.StreamServer.Connection) !void {
     std.log.debug("got connection", .{});
 
     var br = std.io.bufferedReader(conn.stream.reader());
@@ -28,8 +34,8 @@ pub fn handle(self: *Self, fred: *Fred, conn: std.net.StreamServer.Connection) !
         return error.invalid_op;
     }
 
-    self.size.width = try reader.readIntBig(u16);
-    self.size.height = try reader.readIntBig(u16);
+    const width = try reader.readIntBig(u16);
+    const height = try reader.readIntBig(u16);
 
     const path_len = try reader.readIntBig(u16);
     var path = try self.gpa.alloc(u8, path_len);
@@ -41,34 +47,59 @@ pub fn handle(self: *Self, fred: *Fred, conn: std.net.StreamServer.Connection) !
         return error.path_too_short;
     }
 
-    std.log.debug("read hello {}x{}", .{self.size.width, self.size.height});
+    std.log.debug("read hello {}x{}", .{ width, height });
 
-    try fred.addBuffer(State.init(self.gpa, &self.size, &fred.input_handler, try Buffer.fromFile(self.gpa, path)));
+    var buf = b: {
+        var node = self.buffers.first;
+        while (node) |n| {
+            if (n.data.path) |node_path| {
+                if (std.mem.eql(u8, node_path, path)) {
+                    break :b &n.data;
+                }
+            }
+            node = n.next;
+        }
+
+        var new_node = try self.gpa.create(@TypeOf(self.buffers).Node);
+        new_node.data = try Buffer.fromFile(self.gpa, path);
+        self.buffers.prepend(new_node);
+        break :b &new_node.data;
+    };
+
+    var node = try self.gpa.create(@TypeOf(self.views).Node);
+    defer self.gpa.destroy(node);
+
+    node.data = View.init(self.gpa, width, height);
+    self.views.prepend(node);
+    defer self.views.remove(node);
+
+    var view = &node.data;
+    try view.addBuffer(buf);
 
     var bw = std.io.bufferedWriter(conn.stream.writer());
     var writer = bw.writer();
 
-    try self.print(writer, fred);
+    try self.print(writer, view);
     try bw.flush();
 
     while (true) {
-        try self.read(reader, writer, fred);
+        try self.read(reader, writer, view);
         try bw.flush();
     }
 }
 
-fn print(self: *Self, writer: anytype, fred: *Fred) !void {
+fn print(self: *Self, writer: anytype, view: *View) !void {
     var al = std.ArrayList(u8).init(self.gpa);
     defer al.deinit();
 
-    try fred.draw(al.writer());
+    try view.draw(al.writer());
 
     try writer.writeIntBig(u8, @enumToInt(msg.Op.print));
     try writer.writeIntBig(u32, @intCast(u32, al.items.len));
     try writer.writeAll(al.items);
 }
 
-fn read(self: *Self, reader: anytype, writer: anytype, fred: *Fred) !void {
+fn read(self: *Self, reader: anytype, writer: anytype, view: *View) !void {
     const op = @intToEnum(msg.Op, try reader.readIntBig(u8));
     std.log.debug("handling {}", .{op});
     switch (op) {
@@ -81,14 +112,14 @@ fn read(self: *Self, reader: anytype, writer: anytype, fred: *Fred) !void {
             if (n_read != buf.len) return error.eof;
 
             for (buf) |ch| {
-                try fred.handleInput(ch);
+                try view.handleInput(ch);
             }
 
-            try self.print(writer, fred);
+            try self.print(writer, view);
         },
         .resize => {
-            self.size.width = try reader.readIntBig(u16);
-            self.size.height = try reader.readIntBig(u16);
+            view.size.width = try reader.readIntBig(u16);
+            view.size.height = try reader.readIntBig(u16);
         },
         .hello, .print => {},
     }
@@ -107,17 +138,25 @@ pub fn listen(self: *Self, session: []const u8) !void {
 
     try self.server.listen(try std.net.Address.initUnix(path));
 
-    var fred = Fred.init(self.gpa, &self.size);
-    defer fred.deinit();
-
     while (true) {
         var conn = try self.server.accept();
-        self.handle(&fred, conn) catch |err| {
+        self.handle(conn) catch |err| {
             std.log.warn("got error whilst handling conn: {}", .{err});
         };
     }
 }
 
+fn deinitList(self: *Self, comptime T: type, list: *std.SinglyLinkedList(T)) void {
+    var node = list.popFirst();
+    while (node) |n| {
+        n.data.deinit();
+        self.gpa.destroy(n);
+        node = list.popFirst();
+    }
+}
+
 pub fn deinit(self: *Self) void {
     self.server.deinit();
+    self.deinitList(View, &self.views);
+    self.deinitList(Buffer, &self.buffers);
 }
