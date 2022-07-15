@@ -1,1 +1,1 @@
-pub const Op = enum(u8) { hello, print };
+pub const Op = enum(u8) { hello, print, resize, input };

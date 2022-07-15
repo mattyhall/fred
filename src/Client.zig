@@ -6,6 +6,8 @@ const msg = @import("msg.zig");
 const Self = @This();
 
 gpa: std.mem.Allocator,
+stream: std.net.Stream = undefined,
+terminal: *Terminal = undefined,
 
 pub fn init(gpa: std.mem.Allocator) Self {
     return Self{ .gpa = gpa };
@@ -15,96 +17,123 @@ pub fn run(self: *Self, session: []const u8, path: []const u8) !void {
     var uds_path = try std.fs.path.join(self.gpa, &.{ "/tmp/fred", session });
     defer self.gpa.free(uds_path);
 
-    var stream: std.net.Stream = undefined;
+    var stdout = std.io.bufferedWriter(std.io.getStdOut().writer());
+    var stdout_writer = stdout.writer();
+
     while (true) {
-        stream = std.net.connectUnixSocket(uds_path) catch {
+        self.stream = std.net.connectUnixSocket(uds_path) catch {
             std.time.sleep(std.time.ns_per_ms * 10);
             continue;
         };
         break;
     }
 
-    var terminal = try Terminal.init();
+    self.terminal = try Terminal.init();
 
+    std.log.debug("sending hello", .{});
     {
         var al = std.ArrayList(u8).init(self.gpa);
         defer al.deinit();
 
         var writer = al.writer();
         try writer.writeIntBig(u8, @enumToInt(msg.Op.hello));
-        try writer.writeIntBig(u16, @intCast(u16, terminal.size.width));
-        try writer.writeIntBig(u16, @intCast(u16, terminal.size.height));
+        try writer.writeIntBig(u16, @intCast(u16, self.terminal.size.width));
+        try writer.writeIntBig(u16, @intCast(u16, self.terminal.size.height));
         try writer.writeIntBig(u16, @intCast(u16, path.len));
         try writer.writeAll(path);
 
-        try stream.writer().writeAll(al.items);
+        try self.stream.writer().writeAll(al.items);
     }
 
-    var stdout = std.io.bufferedWriter(std.io.getStdOut().writer());
-    var stdout_writer = stdout.writer();
+    var br = std.io.bufferedReader(self.stream.reader());
+    var reader = br.reader();
 
     {
-        var br = std.io.bufferedReader(stream.reader());
-        var reader = br.reader();
         if ((try reader.readIntBig(u8)) != @enumToInt(msg.Op.print)) {
-            stream.close();
+            self.stream.close();
             return error.expected_print;
         }
 
-        const size = try reader.readIntBig(u32);
-        {
-            var i: u16 = 0;
-            while (i < size) : (i += 1) {
-                try stdout_writer.writeByte(try reader.readByte());
-            }
-        }
+        try self.readPrint(reader, stdout_writer);
         try stdout.flush();
     }
 
     while (true) {
-        const inp = terminal.getInput();
-        if (inp[0] == 'q') {
-            return;
+        var poll_fds = [_]std.os.pollfd{
+            .{ .fd = std.os.STDIN_FILENO, .events = std.os.POLL.IN, .revents = undefined },
+            .{ .fd = self.terminal.fd, .events = std.os.POLL.IN, .revents = undefined },
+            .{ .fd = self.stream.handle, .events = std.os.POLL.IN, .revents = undefined },
+        };
+        const events = try std.os.poll(&poll_fds, std.math.maxInt(i32));
+        std.debug.assert(events != 0);
+        if (events == 0) continue;
+
+        std.log.debug("polled", .{});
+
+        if (poll_fds[0].revents & std.os.POLL.IN != 0) {
+            const inp = self.terminal.getInput();
+            std.log.debug("terminal input {s}", .{inp});
+            if (inp[0] == 'q') return;
+
+            try self.sendInput(inp);
+        }
+
+        var proc_buf: [16 * 1024]u8 = undefined;
+        if (poll_fds[1].revents & std.os.POLL.IN != 0) {
+            std.log.debug("resize", .{});
+            _ = try std.os.read(self.terminal.fd, &proc_buf);
+            try self.sendResize();
+        }
+
+        if ((poll_fds[2].revents & std.os.POLL.IN != 0) or br.fifo.readableLength() > 0) {
+            std.log.debug("stream readable", .{});
+            try self.read(reader, stdout_writer);
+            try stdout.flush();
+       }
+    }
+}
+
+fn readPrint(self: *Self, reader: anytype, stdout_writer: anytype) !void {
+    _ = self;
+
+    const size = try reader.readIntBig(u32);
+    std.log.debug("print buf is {}", .{size});
+    {
+        var i: u16 = 0;
+        while (i < size) : (i += 1) {
+            try stdout_writer.writeByte(try reader.readByte());
         }
     }
+}
 
-    //    var terminal = try Terminal.init();
-    //    var gpa = std.heap.GeneralPurposeAllocator(.{}){ .backing_allocator = std.heap.c_allocator };
-    //    var allocator = gpa.allocator();
-    //    defer _ = gpa.deinit();
-    //
-    //    var fred = Fred.init(allocator, terminal);
-    //    defer fred.deinit();
-    //
-    //    try fred.addBuffer(State.init(allocator, &terminal.size, &fred.input_handler, try Buffer.fromFile(allocator, path)));
-    //
-    //    while (true) {
-    //        var poll_fds = [_]std.os.pollfd{
-    //            .{ .fd = std.os.STDIN_FILENO, .events = std.os.POLL.IN, .revents = undefined },
-    //            .{ .fd = terminal.fd, .events = std.os.POLL.IN, .revents = undefined },
-    //        };
-    //        const events = try std.os.poll(&poll_fds, std.math.maxInt(i32));
-    //        std.debug.assert(events != 0);
-    //        if (events == 0) continue;
-    //
-    //        if (poll_fds[0].revents & std.os.POLL.IN != 0) {
-    //            const inp = terminal.getInput();
-    //            for (inp) |ch| {
-    //                try fred.handleInput(ch);
-    //            }
-    //
-    //            try fred.draw(writer);
-    //            try stdout.flush();
-    //        }
-    //
-    //        var proc_buf: [16 * 1024]u8 = undefined;
-    //        if (poll_fds[1].revents & (std.os.POLL.IN) != 0) {
-    //            _ = try std.os.read(terminal.fd, &proc_buf);
-    //
-    //            try fred.draw(writer);
-    //            try stdout.flush();
-    //        }
-    //    }
+fn read(self: *Self, reader: anytype, writer: anytype) !void {
+    const op = @intToEnum(msg.Op, try reader.readIntBig(u8));
+    switch (op) {
+        .print => try self.readPrint(reader, writer),
+        .hello, .resize, .input => {},
+    }
+}
+
+fn sendResize(self: *Self) !void {
+    var buffered = std.io.bufferedWriter(self.stream.writer());
+    var writer = buffered.writer();
+
+    try writer.writeIntBig(u8, @enumToInt(msg.Op.resize));
+    try writer.writeIntBig(u16, @intCast(u16, self.terminal.size.width));
+    try writer.writeIntBig(u16, @intCast(u16, self.terminal.size.height));
+
+    try buffered.flush();
+}
+
+fn sendInput(self: *Self, inp: []const u8) !void {
+    var buffered = std.io.bufferedWriter(self.stream.writer());
+    var writer = buffered.writer();
+
+    try writer.writeIntBig(u8, @enumToInt(msg.Op.input));
+    try writer.writeIntBig(u8, @intCast(u8, inp.len));
+    try writer.writeAll(inp);
+
+    try buffered.flush();
 }
 
 pub fn deinit(_: *Self) void {}

@@ -25,11 +25,13 @@ var log_file: std.fs.File = undefined;
 pub fn panic(m: []const u8, error_return_trace: ?*std.builtin.StackTrace) noreturn {
     Terminal.cleanupTerminal();
     const first_trace_addr = @returnAddress();
+    std.log.err("panic: {s}", .{m});
     std.debug.panicImpl(error_return_trace, first_trace_addr, m);
 }
 
-fn setupLogging() !void {
-    log_file = try std.fs.cwd().createFile("fred.log", .{});
+fn setupLogging(server: bool) !void {
+    const name = if (server) "fred_server.log" else "fred.log";
+    log_file = try std.fs.cwd().createFile(name, .{});
 }
 
 pub fn log(
@@ -44,8 +46,6 @@ pub fn log(
 }
 
 pub fn main() anyerror!void {
-    try setupLogging();
-
     var stdout = std.io.bufferedWriter(std.io.getStdOut().writer());
     var writer = stdout.writer();
 
@@ -59,10 +59,15 @@ pub fn main() anyerror!void {
             std.os.exit(1);
         }
 
+        try setupLogging(false);
+
         var client = Client.init(gpa.allocator());
         defer client.deinit();
 
-        try client.run(std.mem.span(std.os.argv[1]), std.mem.span(std.os.argv[2]));
+        client.run(std.mem.span(std.os.argv[1]), std.mem.span(std.os.argv[2])) catch |err| {
+            std.log.err("got error: {}", .{err});
+            return err;
+        };
 
         return;
     }
@@ -75,16 +80,28 @@ pub fn main() anyerror!void {
 
     const id = newIdentifier();
     if ((try std.os.fork()) == 0) {
+        try setupLogging(true);
+
         var server = Server.init(gpa.allocator());
         defer server.deinit();
-        try server.listen(&id);
+
+        server.listen(&id) catch |err| {
+            std.log.err("got error: {}", .{err});
+            return err;
+        };
+
         return;
     }
+
+    try setupLogging(false);
 
     var client = Client.init(gpa.allocator());
     defer client.deinit();
 
-    try client.run(&id, std.mem.span(std.os.argv[1]));
+    client.run(&id, std.mem.span(std.os.argv[1])) catch |err| {
+            std.log.err("got error: {}", .{err});
+            return err;
+    };
 }
 
 test "catch all" {
