@@ -171,7 +171,7 @@ pub fn listen(self: *Self, session: []const u8) !void {
     while (true) {
         var conn = try self.server.accept();
 
-        var thread = try std.Thread.spawn(.{}, connectionThreadMain, .{self, conn});
+        var thread = try std.Thread.spawn(.{}, connectionThreadMain, .{ self, conn });
         thread.detach();
     }
 }

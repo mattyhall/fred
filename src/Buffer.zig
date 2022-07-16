@@ -11,7 +11,7 @@ path: ?[]const u8 = null,
 dirty: bool = false,
 
 subscribers: std.ArrayListUnmanaged(struct {
-    handler: fn(view: *View, buffer: *const Self) void,
+    handler: fn (view: *View, buffer: *const Self) void,
     view: *View,
 }),
 
@@ -65,11 +65,11 @@ pub fn fromSlice(allocator: std.mem.Allocator, data: []u8) Self {
     };
 }
 
-pub fn register(self: *Self, f: fn(view: *View, buffer: *const Self) void, view: *View) !void {
+pub fn register(self: *Self, f: fn (view: *View, buffer: *const Self) void, view: *View) !void {
     self.lock.lock();
     defer self.lock.unlock();
 
-    try self.subscribers.append(self.gpa, .{ .handler  = f, .view = view });
+    try self.subscribers.append(self.gpa, .{ .handler = f, .view = view });
 }
 
 pub fn unregister(self: *Self, view: *const View) void {
