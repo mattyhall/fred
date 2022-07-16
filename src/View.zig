@@ -29,7 +29,7 @@ pub fn init(allocator: std.mem.Allocator) Self {
     };
 }
 
-fn current(self: *const Self) *State {
+pub fn current(self: *const Self) *State {
     return &self.buffers.items[self.current_buffer];
 }
 
@@ -45,32 +45,11 @@ pub fn addBuffer(self: *Self, buffer: *Buffer) !void {
     try self.buffers.items[self.buffers.items.len - 1].buffer.calculateLines();
 }
 
-pub fn handleInput(self: *Self, ch: u8) !void {
+pub fn handleInstructions(self: *Self, instructions: []const input.Instruction) !void {
     self.current().buffer.lock.lock();
     defer self.current().buffer.lock.unlock();
 
-    const instructions = (try self.input_handler.handleInput(ch)) orelse return;
-    switch (instructions[0]) {
-        .command => |al| {
-            if (std.mem.eql(u8, "q", al.items)) std.os.exit(0);
-            if (std.mem.eql(u8, "w", al.items)) try self.current().buffer.save();
-
-            // if (std.mem.eql(u8, "b", al.items)) self.current_buffer = (self.current_buffer + 1) % self.buffers.items.len;
-
-            //             if (std.mem.startsWith(u8, al.items, "e") and al.items.len > 2) {
-            //                 const p = al.items[2..];
-            //                 const buf = try Buffer.fromFile(self.gpa, p);
-            //                 try self.addBuffer(State.init(self.gpa, self.size, &self.input_handler, buf));
-            //                 self.current_buffer = self.buffers.items.len - 1;
-            //             }
-
-            al.deinit();
-            return;
-        },
-        else => {},
-    }
-
-    try self.current().handleInput(&instructions);
+    try self.current().handleInput(instructions);
 }
 
 pub fn draw(self: *const Self, writer: anytype) !void {

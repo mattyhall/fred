@@ -116,14 +116,41 @@ fn read(self: *Self, reader: anytype, writer: anytype, view: *View) !void {
     switch (op) {
         .input => {
             const len = try reader.readIntBig(u8);
-            var buf = try self.gpa.alloc(u8, len);
-            defer self.gpa.free(buf);
+            var inp = try self.gpa.alloc(u8, len);
+            defer self.gpa.free(inp);
 
-            const n_read = try reader.read(buf);
-            if (n_read != buf.len) return error.eof;
+            const n_read = try reader.read(inp);
+            if (n_read != inp.len) return error.eof;
 
-            for (buf) |ch| {
-                try view.handleInput(ch);
+            for (inp) |ch| {
+                var instructions = (try view.input_handler.handleInput(ch)) orelse continue;
+                switch (instructions[0]) {
+                    .command => |al| {
+                        if (std.mem.eql(u8, "q", al.items)) {
+                            // TODO close stream
+                            std.os.exit(0);
+                        }
+
+                        if (std.mem.eql(u8, "w", al.items)) try view.current().buffer.save();
+
+                        if (std.mem.eql(u8, "b", al.items))
+                            view.current_buffer = (view.current_buffer + 1) % view.buffers.items.len;
+
+                        if (std.mem.startsWith(u8, al.items, "e") and al.items.len > 2) {
+                            const p = al.items[2..];
+                            const buf = try Buffer.fromFile(self.gpa, p);
+                            var node = try self.gpa.create(@TypeOf(self.buffers).Node);
+                            node.data = buf;
+                            self.buffers.prepend(node);
+
+                            try view.addBuffer(&node.data);
+                            view.current_buffer = view.buffers.items.len - 1;
+                        }
+
+                        al.deinit();
+                    },
+                    else => try view.handleInstructions(&instructions),
+                }
             }
 
             try self.print(writer, view);
