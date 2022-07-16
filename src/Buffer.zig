@@ -6,6 +6,7 @@ data: std.ArrayListUnmanaged(u8),
 lines: std.ArrayListUnmanaged(u32),
 path: ?[]const u8 = null,
 dirty: bool = false,
+lock: std.Thread.Mutex = .{},
 
 const Self = @This();
 

@@ -36,6 +36,9 @@ pub fn addBuffer(self: *Self, buffer: *Buffer) !void {
 }
 
 pub fn handleInput(self: *Self, ch: u8) !void {
+    self.current().buffer.lock.lock();
+    defer self.current().buffer.lock.unlock();
+
     const instructions = (try self.input_handler.handleInput(ch)) orelse return;
     switch (instructions[0]) {
         .command => |al| {
@@ -61,6 +64,9 @@ pub fn handleInput(self: *Self, ch: u8) !void {
 }
 
 pub fn draw(self: *const Self, writer: anytype) !void {
+    self.current().buffer.lock.lock();
+    defer self.current().buffer.lock.unlock();
+
     std.log.debug("size: {any}", .{self.size});
 
     // Clear
