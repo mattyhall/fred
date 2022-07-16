@@ -1,11 +1,20 @@
 const std = @import("std");
 const ds = @import("ds.zig");
+const View = @import("View.zig");
 
 gpa: std.mem.Allocator,
+
 data: std.ArrayListUnmanaged(u8),
 lines: std.ArrayListUnmanaged(u32),
+
 path: ?[]const u8 = null,
 dirty: bool = false,
+
+subscribers: std.ArrayListUnmanaged(struct {
+    handler: fn(view: *View, buffer: *const Self) void,
+    view: *View,
+}),
+
 lock: std.Thread.Mutex = .{},
 
 const Self = @This();
@@ -51,8 +60,25 @@ pub fn fromSlice(allocator: std.mem.Allocator, data: []u8) Self {
     return Self{
         .gpa = allocator,
         .data = std.ArrayListUnmanaged(u8){ .items = data, .capacity = data.len },
-        .lines = std.ArrayListUnmanaged(u32){},
+        .lines = .{},
+        .subscribers = .{},
     };
+}
+
+pub fn register(self: *Self, f: fn(view: *View, buffer: *const Self) void, view: *View) !void {
+    self.lock.lock();
+    defer self.lock.unlock();
+
+    try self.subscribers.append(self.gpa, .{ .handler  = f, .view = view });
+}
+
+pub fn unregister(self: *Self, view: *const View) void {
+    for (self.subscribers.items) |elem, i| {
+        if (elem.view != view) continue;
+
+        _ = self.subscribers.swapRemove(i);
+        break;
+    }
 }
 
 pub fn save(self: *Self) !void {
@@ -95,6 +121,9 @@ pub fn lineSpan(self: *const Self, line: u32) ds.Span {
 fn change(self: *Self) !void {
     self.dirty = true;
     try self.calculateLines();
+    for (self.subscribers.items) |s| {
+        s.handler(s.view, self);
+    }
 }
 
 pub fn orderedRemove(self: *Self, index: usize) !void {
@@ -115,6 +144,7 @@ pub fn insertSlice(self: *Self, index: usize, s: []const u8) !void {
 pub fn deinit(self: *Self) void {
     self.data.deinit(self.gpa);
     self.lines.deinit(self.gpa);
+    self.subscribers.deinit(self.gpa);
     if (self.path) |p| self.gpa.free(p);
 }
 

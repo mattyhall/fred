@@ -16,6 +16,8 @@ buffers: std.ArrayListUnmanaged(State),
 
 input_handler: input.InputHandler,
 
+event_fd: std.os.fd_t,
+
 pub fn init(allocator: std.mem.Allocator) Self {
     return Self{
         .gpa = allocator,
@@ -23,6 +25,7 @@ pub fn init(allocator: std.mem.Allocator) Self {
         .buffers = std.ArrayListUnmanaged(State){},
         .input_handler = input.InputHandler.init(allocator),
         .size = .{ .width = 80, .height = 80 },
+        .event_fd = std.os.eventfd(0, 0) catch unreachable,
     };
 }
 
@@ -30,7 +33,14 @@ fn current(self: *const Self) *State {
     return &self.buffers.items[self.current_buffer];
 }
 
+fn bufferChanged(self: *Self, buffer: *const Buffer) void {
+    if (self.current().buffer == buffer) {
+        _ = std.os.write(self.event_fd, &[_]u8{ 0, 0, 0, 0, 0, 0, 0, 1 }) catch unreachable;
+    }
+}
+
 pub fn addBuffer(self: *Self, buffer: *Buffer) !void {
+    try buffer.register(bufferChanged, self);
     try self.buffers.append(self.gpa, State.init(self.gpa, &self.size, &self.input_handler, buffer));
     try self.buffers.items[self.buffers.items.len - 1].buffer.calculateLines();
 }
@@ -133,7 +143,9 @@ fn drawStatusLine(self: *const Self, writer: anytype) !void {
 
 pub fn deinit(self: *Self) void {
     for (self.buffers.items) |*b| {
+        b.buffer.unregister(self);
         b.deinit();
     }
+
     self.buffers.deinit(self.gpa);
 }

@@ -75,8 +75,27 @@ pub fn handle(self: *Self, view: *View, conn: std.net.StreamServer.Connection) !
     try bw.flush();
 
     while (true) {
-        try self.read(reader, writer, view);
-        try bw.flush();
+        var poll_fds = [_]std.os.pollfd{
+            .{ .fd = view.event_fd, .events = std.os.POLL.IN, .revents = undefined },
+            .{ .fd = conn.stream.handle, .events = std.os.POLL.IN, .revents = undefined },
+        };
+        const events = try std.os.poll(&poll_fds, std.math.maxInt(i32));
+        std.debug.assert(events != 0);
+        if (events == 0) continue;
+
+        var proc_buf: [8]u8 = undefined;
+        if (poll_fds[0].revents & std.os.POLL.IN != 0) {
+            std.log.debug("print", .{});
+            _ = try std.os.read(view.event_fd, &proc_buf);
+            try self.print(writer, view);
+            try bw.flush();
+        }
+
+        if (poll_fds[1].revents & std.os.POLL.IN != 0) {
+            std.log.debug("read", .{});
+            try self.read(reader, writer, view);
+            try bw.flush();
+        }
     }
 }
 
