@@ -15,3 +15,5 @@ pub const Position = struct { x: u32, y: u32 };
 pub const Cursor = struct {
     pos: Position,
 };
+pub const Direction = enum(u8) { vertical, horizontal };
+

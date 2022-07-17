@@ -1,4 +1,5 @@
 const std = @import("std");
+const ds = @import("ds.zig");
 const View = @import("View.zig");
 const Terminal = @import("Terminal.zig");
 const Buffer = @import("Buffer.zig");
@@ -145,6 +146,13 @@ fn read(self: *Self, reader: anytype, writer: anytype, view: *View) !void {
 
                         al.deinit();
                     },
+                    .split => |dir| {
+                        try writer.writeIntBig(u8, @enumToInt(msg.Op.split));
+                        try writer.writeIntBig(u8, @enumToInt(dir));
+                        const path = view.current().buffer.path orelse unreachable;
+                        try writer.writeIntBig(u16, @intCast(u16, path.len));
+                        try writer.writeAll(path);
+                    },
                     else => try view.handleInstructions(&instructions),
                 }
             }
@@ -155,7 +163,7 @@ fn read(self: *Self, reader: anytype, writer: anytype, view: *View) !void {
             view.size.width = try reader.readIntBig(u16);
             view.size.height = try reader.readIntBig(u16);
         },
-        .hello, .print => {},
+        .hello, .print, .split => {},
     }
 }
 

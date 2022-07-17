@@ -1,4 +1,5 @@
 const std = @import("std");
+const ds = @import("ds.zig");
 const Terminal = @import("Terminal.zig");
 const input = @import("input.zig");
 const msg = @import("msg.zig");
@@ -8,12 +9,15 @@ const Self = @This();
 gpa: std.mem.Allocator,
 stream: std.net.Stream = undefined,
 terminal: *Terminal = undefined,
+session: []const u8 = undefined,
 
 pub fn init(gpa: std.mem.Allocator) Self {
     return Self{ .gpa = gpa };
 }
 
 pub fn run(self: *Self, session: []const u8, path: []const u8) !void {
+    self.session = session;
+
     var uds_path = try std.fs.path.join(self.gpa, &.{ "/tmp/fred", session });
     defer self.gpa.free(uds_path);
 
@@ -114,8 +118,42 @@ fn read(self: *Self, reader: anytype, writer: anytype) !void {
     const op = @intToEnum(msg.Op, try reader.readIntBig(u8));
     switch (op) {
         .print => try self.readPrint(reader, writer),
+        .split => try self.readSplit(reader),
         .hello, .resize, .input => {},
     }
+}
+
+fn readSplit(self: *Self, reader: anytype) !void {
+    const dir = @intToEnum(ds.Direction, try reader.readIntBig(u8));
+
+    var path = try self.gpa.alloc(u8, try reader.readIntBig(u16));
+    defer self.gpa.free(path);
+
+    const n_read = try reader.read(path);
+    if (n_read != path.len) return error.EndOfStream;
+
+    const argv = b: {
+        var args = &[_][]const u8{
+            "tmux",
+            "split-window",
+            "-h",
+            "fred",
+            "-s",
+            self.session,
+            path,
+        };
+        if (dir == .vertical) break :b args;
+
+        // Remove the "-h"
+        var i: usize = 2;
+        while (i < args.len - 1) : (i += 1) {
+            args[i] = args[i+1];
+        }
+        break :b args[0..args.len-1];
+    };
+
+    var proc = std.ChildProcess.init(argv, self.gpa);
+    try proc.spawn();
 }
 
 fn sendResize(self: *Self) !void {

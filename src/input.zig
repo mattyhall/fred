@@ -1,4 +1,5 @@
 const std = @import("std");
+const ds = @import("ds.zig");
 
 pub const Instruction = union(enum) {
     noop: void,
@@ -10,6 +11,7 @@ pub const Instruction = union(enum) {
         char: void,
         next: void,
     },
+    split: ds.Direction,
     insertion: u8,
     copy_whitespace_from_above: void,
 };
@@ -49,6 +51,7 @@ pub const Mode = union(enum) {
     insert,
     command,
     search,
+    window,
 };
 
 pub const InputHandler = struct {
@@ -160,6 +163,10 @@ pub const InputHandler = struct {
                         try self.repeat.append(self.gpa, c);
                         return instructions;
                     },
+                    23 => {
+                        self.mode = .window;
+                        return instructions;
+                    },
                     else => return instructions,
                 },
                 .goto => switch (c) {
@@ -267,6 +274,22 @@ pub const InputHandler = struct {
                     instructions[0] = .{ .insertion = c };
                     return instructions;
                 },
+            },
+            .window => switch (c) {
+                's' => {
+                    instructions[0] = .{ .split = .horizontal };
+                    self.mode = .{ .normal = .none };
+                    return instructions;
+                },
+                'v' => {
+                    instructions[0] = .{ .split = .vertical};
+                    self.mode = .{ .normal = .none };
+                    return instructions;
+                },
+                else => {
+                    self.mode = .{ .normal = .none };
+                    return instructions;
+                }
             },
         };
 

@@ -232,7 +232,8 @@ pub fn handleInput(self: *Self, instructions: []const input.Instruction) !void {
                 }
             },
             .copy_whitespace_from_above => try self.copyWhitespaceFromAbove(),
-            .noop, .command => {},
+            .noop => {},
+            .command, .split => unreachable,
         }
     }
 }
