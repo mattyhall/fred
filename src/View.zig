@@ -40,9 +40,17 @@ fn bufferChanged(self: *Self, buffer: *const Buffer) void {
 }
 
 pub fn addBuffer(self: *Self, buffer: *Buffer) !void {
+    for (self.buffers.items) |b, i| {
+        if (b.buffer == buffer) {
+            self.current_buffer = i;
+            return;
+        }
+    }
+
     try buffer.register(bufferChanged, self);
     try self.buffers.append(self.gpa, State.init(self.gpa, &self.size, &self.input_handler, buffer));
     try self.buffers.items[self.buffers.items.len - 1].buffer.calculateLines();
+    self.current_buffer = self.buffers.items.len - 1;
 }
 
 pub fn handleInstructions(self: *Self, instructions: []const input.Instruction) !void {

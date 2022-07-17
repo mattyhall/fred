@@ -22,6 +22,23 @@ pub fn init(gpa: std.mem.Allocator) Self {
     };
 }
 
+fn findOrCreateBuffer(self: *Self, path: []const u8) !*Buffer {
+    var node = self.buffers.first;
+    while (node) |n| {
+        if (n.data.path) |node_path| {
+            if (std.mem.eql(u8, node_path, path)) {
+                return &n.data;
+            }
+        }
+        node = n.next;
+    }
+
+    var new_node = try self.gpa.create(@TypeOf(self.buffers).Node);
+    new_node.data = try Buffer.fromFile(self.gpa, path);
+    self.buffers.prepend(new_node);
+    return &new_node.data;
+}
+
 pub fn handle(self: *Self, view: *View, conn: std.net.StreamServer.Connection) !void {
     std.log.debug("got connection", .{});
 
@@ -49,23 +66,7 @@ pub fn handle(self: *Self, view: *View, conn: std.net.StreamServer.Connection) !
 
     std.log.debug("read hello {}x{}", .{ view.size.width, view.size.height });
 
-    var buf = b: {
-        var node = self.buffers.first;
-        while (node) |n| {
-            if (n.data.path) |node_path| {
-                if (std.mem.eql(u8, node_path, path)) {
-                    break :b &n.data;
-                }
-            }
-            node = n.next;
-        }
-
-        var new_node = try self.gpa.create(@TypeOf(self.buffers).Node);
-        new_node.data = try Buffer.fromFile(self.gpa, path);
-        self.buffers.prepend(new_node);
-        break :b &new_node.data;
-    };
-
+    var buf = try self.findOrCreateBuffer(path);
     try view.addBuffer(buf);
 
     var bw = std.io.bufferedWriter(conn.stream.writer());
@@ -138,13 +139,8 @@ fn read(self: *Self, reader: anytype, writer: anytype, view: *View) !void {
 
                         if (std.mem.startsWith(u8, al.items, "e") and al.items.len > 2) {
                             const p = al.items[2..];
-                            const buf = try Buffer.fromFile(self.gpa, p);
-                            var node = try self.gpa.create(@TypeOf(self.buffers).Node);
-                            node.data = buf;
-                            self.buffers.prepend(node);
-
-                            try view.addBuffer(&node.data);
-                            view.current_buffer = view.buffers.items.len - 1;
+                            const buf = try self.findOrCreateBuffer(p);
+                            try view.addBuffer(buf);
                         }
 
                         al.deinit();
