@@ -12,6 +12,7 @@ gpa: std.mem.Allocator,
 server: std.net.StreamServer,
 buffers: std.SinglyLinkedList(Buffer),
 views: std.SinglyLinkedList(View),
+view_count: std.atomic.Atomic(u16),
 
 pub fn init(gpa: std.mem.Allocator) Self {
     var server = std.net.StreamServer.init(.{});
@@ -20,6 +21,7 @@ pub fn init(gpa: std.mem.Allocator) Self {
         .server = server,
         .buffers = std.SinglyLinkedList(Buffer){},
         .views = std.SinglyLinkedList(View){},
+        .view_count = std.atomic.Atomic(u16).init(0),
     };
 }
 
@@ -95,7 +97,10 @@ pub fn handle(self: *Self, view: *View, conn: std.net.StreamServer.Connection) !
 
         if (poll_fds[1].revents & std.os.POLL.IN != 0) {
             std.log.debug("read", .{});
-            try self.read(reader, writer, view);
+            if ((try self.read(reader, writer, view)) == .quit) {
+                conn.stream.close();
+                return;
+            }
             try bw.flush();
         }
     }
@@ -112,7 +117,7 @@ fn print(self: *Self, writer: anytype, view: *View) !void {
     try writer.writeAll(al.items);
 }
 
-fn read(self: *Self, reader: anytype, writer: anytype, view: *View) !void {
+fn read(self: *Self, reader: anytype, writer: anytype, view: *View) !enum {quit, cont} {
     const op = @intToEnum(msg.Op, try reader.readIntBig(u8));
     std.log.debug("handling {}", .{op});
     switch (op) {
@@ -129,8 +134,11 @@ fn read(self: *Self, reader: anytype, writer: anytype, view: *View) !void {
                 switch (instructions[0]) {
                     .command => |al| {
                         if (std.mem.eql(u8, "q", al.items)) {
-                            // TODO close stream
-                            std.os.exit(0);
+                            const count = self.view_count.fetchSub(1, .AcqRel);
+                            std.log.debug("got :q, {} views left including one that sent :q", .{count});
+                            if (count == 1) std.os.exit(0);
+
+                            return .quit;
                         }
 
                         if (std.mem.eql(u8, "w", al.items)) try view.current().buffer.save();
@@ -165,6 +173,8 @@ fn read(self: *Self, reader: anytype, writer: anytype, view: *View) !void {
         },
         .hello, .print, .split => {},
     }
+
+    return .cont;
 }
 
 fn connectionThreadMain(server: *Self, conn: std.net.StreamServer.Connection) void {
@@ -201,6 +211,8 @@ pub fn listen(self: *Self, session: []const u8) !void {
 
     while (true) {
         var conn = try self.server.accept();
+
+        _ = self.view_count.fetchAdd(1, .Monotonic);
 
         var thread = try std.Thread.spawn(.{}, connectionThreadMain, .{ self, conn });
         thread.detach();
