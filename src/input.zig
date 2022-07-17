@@ -282,14 +282,14 @@ pub const InputHandler = struct {
                     return instructions;
                 },
                 'v' => {
-                    instructions[0] = .{ .split = .vertical};
+                    instructions[0] = .{ .split = .vertical };
                     self.mode = .{ .normal = .none };
                     return instructions;
                 },
                 else => {
                     self.mode = .{ .normal = .none };
                     return instructions;
-                }
+                },
             },
         };
 

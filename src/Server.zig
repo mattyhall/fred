@@ -117,7 +117,7 @@ fn print(self: *Self, writer: anytype, view: *View) !void {
     try writer.writeAll(al.items);
 }
 
-fn read(self: *Self, reader: anytype, writer: anytype, view: *View) !enum {quit, cont} {
+fn read(self: *Self, reader: anytype, writer: anytype, view: *View) !enum { quit, cont } {
     const op = @intToEnum(msg.Op, try reader.readIntBig(u8));
     std.log.debug("handling {}", .{op});
     switch (op) {

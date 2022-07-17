@@ -147,9 +147,9 @@ fn readSplit(self: *Self, reader: anytype) !void {
         // Remove the "-h"
         var i: usize = 2;
         while (i < args.len - 1) : (i += 1) {
-            args[i] = args[i+1];
+            args[i] = args[i + 1];
         }
-        break :b args[0..args.len-1];
+        break :b args[0 .. args.len - 1];
     };
 
     var proc = std.ChildProcess.init(argv, self.gpa);
