@@ -384,8 +384,8 @@ fn move(self: *Self, movement: input.Movement, opts: input.MovementOpts) void {
                 self.offset = .{ .x = 0, .y = @intCast(u32, self.buffer.lines.items.len) - self.size().height };
         },
         .goto_line => {
-            if (opts.repeat == 0 or opts.repeat > self.buffer.lines.items.len) return;
-            const line = opts.repeat - 1;
+            if (opts.repeat == 0) return;
+            const line = std.math.min(opts.repeat - 1, self.buffer.lines.items.len - 1);
             if (line < self.size().height) {
                 self.cursor.pos = .{ .x = 0, .y = line };
                 self.offset = .{ .x = 0, .y = 0 };
