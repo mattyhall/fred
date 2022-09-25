@@ -19,7 +19,7 @@
       zig = pkgs.stdenv.mkDerivation {
         name = "zig";
         src = fetchTarball {
-          url = "https://ziglang.org/builds/zig-linux-x86_64-0.10.0-dev.2431+0e6285c8f.tar.xz";
+          url = "https://ziglang.org/builds/zig-linux-x86_64-0.10.0-dev.4176+6d7b0690a.tar.xz";
           sha256 = "sha256:18qnmggg5khy9bji11xb7mrxw4gj1qa9d28201737fb9hj0f1m2n";
         };
         dontConfigure = true;
