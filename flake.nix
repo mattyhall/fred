@@ -20,7 +20,7 @@
         name = "zig";
         src = fetchTarball {
           url = "https://ziglang.org/builds/zig-linux-x86_64-0.10.0-dev.4176+6d7b0690a.tar.xz";
-          sha256 = "sha256:18qnmggg5khy9bji11xb7mrxw4gj1qa9d28201737fb9hj0f1m2n";
+          sha256 = "sha256:1s3cb5i9f6xg4w1snd0afxnf64vhjh5phjmk8myyi0qcy1761h9w";
         };
         dontConfigure = true;
         dontBuild = true;
